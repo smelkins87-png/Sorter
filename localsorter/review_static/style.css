@@ -72,6 +72,19 @@ select, input[type="search"] {
 }
 select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+.banner {
+  position: relative;
+  z-index: 1;
+  margin: 4px 20px 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  border: 1px solid #6b5419;
+  background: rgba(58, 47, 18, 0.92);
+  color: #f6dfa0;
+}
+.banner b { color: #fff; }
+.banner.busy { border-color: var(--accent); background: rgba(59, 21, 19, 0.92); color: #ffc9c4; }
+
 .stats {
   display: flex;
   flex-wrap: wrap;
@@ -245,6 +258,7 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 @media (max-width: 720px) {
+  .banner { margin-left: 12px; margin-right: 12px; }
   .bar, .stats, .tabs, .grid, .foot { padding-left: 12px; padding-right: 12px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .fix { grid-template-columns: 1fr; padding: 12px; }

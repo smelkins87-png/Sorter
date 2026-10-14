@@ -5,8 +5,12 @@ ever sent: the bulk file and the image downloads are identical for everyone.
 See https://scryfall.com/docs/api for the usage guidelines this follows.
 """
 import codecs
+import glob
 import gzip
 import json
+import os
+import re
+import urllib.parse
 import time
 import urllib.request
 import zlib
@@ -175,6 +179,63 @@ def iter_bulk_cards(kind="default_cards"):
                 yield card
 
     return info, _iter()
+
+
+class ImageCache(object):
+    """Keeps every downloaded card image on disk, so the reference data can
+    be rebuilt offline (after tuning, or when the close-up boxes change).
+
+    Files mirror Scryfall's URL layout, with the image's version (the URL's
+    "?1712345678" suffix) in the name: when Scryfall replaces an image the
+    URL changes, the new one is downloaded and the old version removed."""
+    _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+    def __init__(self, folder, fetch=None):
+        self.folder = folder
+        self.fetch = fetch or download_bytes
+
+    def path_for(self, url):
+        parsed = urllib.parse.urlparse(url)
+        parts = [p for p in parsed.path.split("/") if p]
+
+        if not parts or not all(self._SAFE.match(p) and p not in (".", "..") for p in parts):
+            return None
+
+        stem, ext = os.path.splitext(parts[-1])
+        version = re.sub(r"[^0-9A-Za-z]", "", parsed.query)[:32]
+        name = "%s.%s%s" % (stem, version, ext) if version else parts[-1]
+
+        return os.path.join(self.folder, parsed.netloc.replace(":", "_"), *(parts[:-1] + [name]))
+
+    def __call__(self, url):
+        path = self.path_for(url)
+
+        if path is None:
+            return self.fetch(url)
+
+        if os.path.exists(path):
+            with open(path, "rb") as handle:
+                return handle.read()
+
+        data = self.fetch(url)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp, path)
+
+        # Older versions of the same image are now stale
+        stem = os.path.basename(self.path_for(url.split("?")[0]) or "")
+        prefix, ext = os.path.splitext(stem)
+        for old in glob.glob(os.path.join(os.path.dirname(path), glob.escape(prefix) + ".*" + ext)):
+            if old != path:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+
+        return data
 
 
 def download_bytes(url, retries=3):

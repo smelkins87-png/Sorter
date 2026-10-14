@@ -59,10 +59,12 @@ def _read_csv(path):
 
 
 class Review:
-    def __init__(self, settings, conn, db_lock):
+    def __init__(self, settings, conn, db_lock, status=None):
         self.settings = settings
         self.conn = conn
         self.db_lock = db_lock
+        # Callable giving the sorter's state (paused for review, re-sorting)
+        self.status = status or (lambda: {"waiting_review": None, "resorting": None})
 
         with self.db_lock, self.conn:
             self.conn.executescript(LABELS_SCHEMA)
@@ -382,6 +384,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 return self._static("index.html")
             if parts[0] == "static" and len(parts) == 2:
                 return self._static(parts[1])
+            if parts == ["api", "status"]:
+                return self._send(200, review.status())
             if parts == ["api", "days"]:
                 return self._send(200, review.days())
             if parts == ["api", "scans"]:
@@ -465,7 +469,7 @@ def make_review_server(review, host, port, password=""):
 
 def start_review_server(app, settings):
     """Runs the review page next to the sorter API (a daemon thread)."""
-    review = Review(settings, app.conn, app.db_lock)
+    review = Review(settings, app.conn, app.db_lock, status=app.sorter_status)
     server = make_review_server(review, settings.review_host, settings.review_port, settings.review_password)
     thread = threading.Thread(target=server.serve_forever, name="review", daemon=True)
     thread.start()

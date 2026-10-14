@@ -83,3 +83,44 @@ def test_changed_image_is_processed_again():
     assert indexer.build(conn, delay=0, fetch=fetch) == (1, 0)
     assert fetch.calls == [card["image_uris"]["small"]]
     assert conn.execute("SELECT COUNT(*) FROM hashes").fetchone()[0] == 1
+
+
+def test_image_cache_keeps_images_and_replaces_changed_ones(tmp_path):
+    from localsorter.scryfall import ImageCache
+
+    calls = []
+    cache = ImageCache(str(tmp_path), fetch=lambda url: calls.append(url) or url.encode())
+    url = "https://cards.scryfall.io/normal/front/a/b/abc.jpg?1700000000"
+
+    assert cache(url) == url.encode() and cache(url) == url.encode()
+    assert calls == [url]                                   # second time from disk
+    first = cache.path_for(url)
+    assert first.endswith("cards.scryfall.io/normal/front/a/b/abc.1700000000.jpg")
+
+    newer = url.replace("1700000000", "1800000000")
+    cache(newer)
+    assert not __import__("os").path.exists(first)          # old version removed
+    assert calls == [url, newer]
+
+
+def test_image_cache_rejects_odd_paths(tmp_path):
+    from localsorter.scryfall import ImageCache
+
+    cache = ImageCache(str(tmp_path), fetch=lambda url: b"x")
+    assert cache.path_for("https://cards.scryfall.io/../../etc/passwd") is None
+    assert cache("https://cards.scryfall.io/../../etc/passwd") == b"x"   # fetched, never stored
+
+
+def test_index_build_can_use_the_cache(tmp_path):
+    from localsorter.scryfall import ImageCache
+
+    conn = carddb.connect(":memory:")
+    carddb.import_cards(conn, [scryfall_card(i) for i in range(3)])
+    fetch = _fetcher()
+    cache = ImageCache(str(tmp_path), fetch=fetch)
+    assert indexer.build(conn, delay=0, fetch=cache) == (3, 0)
+
+    # Rebuild from scratch: nothing downloaded again
+    conn.execute("DELETE FROM hashes")
+    assert indexer.build(conn, delay=0, fetch=cache) == (3, 0)
+    assert len(fetch.calls) == 3

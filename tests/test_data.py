@@ -448,3 +448,38 @@ def test_sorter_language_setting_is_reported():
     row = _db_row({"usd": "1.00"})
     assert carddb.to_api_card(row, lang="de")["lang"] == "de"
     assert carddb.to_api_card(row, lang="auto")["lang"] == row["lang"]
+
+
+def test_price_trend_is_a_moving_average_updated_once_a_day():
+    conn = carddb.connect(":memory:")
+    card = scryfall_card(1, usd="2.00")
+    carddb.import_cards(conn, [card])
+
+    assert carddb.update_trends(conn, "2026-10-01") == 1
+    row = conn.execute("SELECT * FROM cards").fetchone()
+    assert row["trend_usd"] == 2.0                      # starts at the price
+
+    # A spike to 6.00 moves the trend only a quarter of the way
+    card["prices"]["usd"] = "6.00"
+    carddb.import_cards(conn, [card])
+    carddb.update_trends(conn, "2026-10-02")
+    assert conn.execute("SELECT trend_usd FROM cards").fetchone()[0] == pytest.approx(3.0)
+
+    # Same day again: no double counting
+    assert carddb.update_trends(conn, "2026-10-02") == 0
+
+    row = conn.execute("SELECT * FROM cards").fetchone()
+    api = carddb.to_api_card(row)
+    assert api["price"] == 6.0 and api["price_trend"] == 3.0
+
+    # The sync keeps the trend: re-importing card data must not reset it
+    carddb.import_cards(conn, [card])
+    assert conn.execute("SELECT trend_usd FROM cards").fetchone()[0] == pytest.approx(3.0)
+
+
+def test_trend_falls_back_to_price_before_the_first_update():
+    conn = carddb.connect(":memory:")
+    carddb.import_cards(conn, [scryfall_card(1, usd="2.50")])
+    row = conn.execute("SELECT * FROM cards").fetchone()
+
+    assert carddb.to_api_card(row)["price_trend"] == 2.5

@@ -244,6 +244,41 @@ $("not-card").addEventListener("click", async () => {
   await setLabel(scan, "not_a_card");
 });
 
+// --- the sorter's state ---------------------------------------------------------
+
+let lastStatus = "";
+
+async function pollStatus() {
+  try {
+    const status = await api("/api/status");
+    const banner = $("banner");
+    const key = JSON.stringify(status);
+
+    if (status.waiting_review) {
+      const w = status.waiting_review;
+      banner.className = "banner";
+      banner.replaceChildren(
+        el("b", {}, "Sorter paused since " + w.since + ": "),
+        w.cards + " card" + (w.cards === 1 ? "" : "s") + " in the manual-check bin. Review them below, then press ",
+        el("b", {}, "Resume"), " on the touchscreen to sort them (or Stop to finish).");
+      banner.hidden = false;
+    } else if (status.resorting) {
+      banner.className = "banner busy";
+      banner.replaceChildren(el("b", {}, "Re-sorting the manual-check bin: "),
+        status.resorting.left + " card" + (status.resorting.left === 1 ? "" : "s") + " left.");
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+
+    // Something changed on the sorter: new scans may have arrived
+    if (lastStatus && key !== lastStatus && state.day) await loadScans();
+    lastStatus = key;
+  } catch (error) {
+    /* the page keeps working without the banner */
+  }
+}
+
 // --- wiring -------------------------------------------------------------------
 
 $("day").addEventListener("change", async (event) => {
@@ -261,3 +296,5 @@ for (const tab of document.querySelectorAll(".tab")) {
 }
 
 loadDays().catch((error) => showEmpty("Could not load scans: " + error.message));
+pollStatus();
+setInterval(pollStatus, 5000);

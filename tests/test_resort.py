@@ -123,6 +123,30 @@ def test_unknown_photo_and_stop(env):
     assert answer["result"]["set"] == "TST"          # no verdicts once stopped
 
 
+def test_sorter_status_for_the_banner(env):
+    assert env.app.sorter_status() == {"waiting_review": None, "resorting": None}
+
+    env.app.resort_waiting({"cards": 2, "position": 5})
+    waiting = env.app.sorter_status()["waiting_review"]
+    assert waiting["cards"] == 2 and waiting["position"] == 5 and waiting["since"]
+
+    env.scan("u1", 1, 1, "corrected", env.reprint)
+    env.scan("u2", 2, 2)
+    env.app.resort_start(["u1", "u2"])
+    assert env.app.sorter_status() == {"waiting_review": None, "resorting": {"left": 2}}
+
+    env.pull(1, 1)
+    assert env.app.sorter_status()["resorting"] == {"left": 1}
+
+    env.app.resort_stop()
+    assert env.app.sorter_status() == {"waiting_review": None, "resorting": None}
+
+    # Stop pressed while waiting clears the banner
+    env.app.resort_waiting({"cards": 3})
+    env.app.resort_waiting({"cards": 0})
+    assert env.app.sorter_status()["waiting_review"] is None
+
+
 def test_scans_without_a_photo_are_skipped(env):
     env.app.resort_start(["never-saved"])
     assert env.app.resort.queue == []
@@ -226,8 +250,10 @@ def test_pauses_for_review_then_pulls_the_bin(plugin):
     assert robot.global_pause.is_set()          # it paused and waited for Resume
     assert any("Review them at http://" in str(m) for m in plugin.logged)
 
-    # Top of the pile first; measured like a feeder; never a destination meanwhile
-    assert plugin.posted == [("/resort/start", {"uuids": ["u5-2", "u5-1", "u5-0"]})]
+    # The review page's banner was told, then the top of the pile first;
+    # measured like a feeder; never a destination meanwhile
+    assert plugin.posted == [("/resort/waiting", {"cards": 3, "position": 5}),
+                             ("/resort/start", {"uuids": ["u5-2", "u5-1", "u5-0"]})]
     assert robot._plate.probed == [5] and bin_.isFeeder
 
     for _ in range(3):
@@ -246,7 +272,24 @@ def test_stop_while_waiting_for_review(plugin):
     threading.Timer(0.2, lambda: setattr(robot, "_running", False)).start()
 
     assert plugin.onRobotGetNextFeeder(robot) is None
-    assert plugin.posted == [] and not bin_.isFeeder
+    # Only the banner was told (and cleared): no re-sort started
+    assert plugin.posted == [("/resort/waiting", {"cards": 2, "position": 5}),
+                             ("/resort/waiting", {"cards": 0})]
+    assert not bin_.isFeeder
+
+
+def test_banner_is_best_effort(plugin):
+    def post(path, data):
+        if path == "/resort/waiting":
+            raise IOError("server busy")
+        return {"result": "ok"}
+
+    plugin._post = post
+    bin_ = Position(5, fixed=True, cards=1)
+    robot = Robot(Plate([bin_, Position(6, fixed=True)]))
+    _resume_after(robot)
+
+    assert plugin.onRobotGetNextFeeder(robot) is bin_
 
 
 def test_stop_halfway_keeps_the_cards_still_in_the_bin(plugin):

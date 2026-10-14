@@ -145,6 +145,7 @@ class Localsorter(PluginBase):
         self._logger.warning("%d cards in the manual-check bin (position %s). Review them at %s, then press "
                              "Resume to sort them, or Stop to finish." % (len(target.cards), target.index,
                                                                          self._review_url()))
+        self._tell_server("/resort/waiting", {"cards": len(target.cards), "position": target.index})
         self._pause(robot)
 
         # Wait for the touchscreen's Resume (or Stop) without moving
@@ -152,6 +153,7 @@ class Localsorter(PluginBase):
             time.sleep(0.2)
 
         if not robot._running:
+            self._tell_server("/resort/waiting", {"cards": 0})
             return None
 
         return self._start_resort(robot, target)
@@ -186,6 +188,13 @@ class Localsorter(PluginBase):
         import requests
 
         return requests.post(self._endpoint() + path, json=data, timeout=60).json()
+
+    def _tell_server(self, path, data):
+        """Best effort: only feeds the review page's banner."""
+        try:
+            self._post(path, data)
+        except Exception as error:
+            self._logger.debug("Could not update the review page (%s)" % error)
 
     def _start_resort(self, robot, target):
         # Top of the pile first: the last card dropped is the first pulled

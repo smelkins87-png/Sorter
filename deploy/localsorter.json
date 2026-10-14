@@ -6,6 +6,7 @@
   "save_images": true,
   "image_retention_days": 30,
   "index_image_size": "small",
+  "image_cache_dir": "",
   "download_workers": 4,
   "download_delay": 0.1,
   "max_distance": 80,

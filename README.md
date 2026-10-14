@@ -119,6 +119,12 @@ Images on a black background blend best. The included artwork is SEGA's, so keep
 | Printing close-ups | ~79k normal-size images (72% of printings share their art), ~6 GB | ~400 MB |
 
 On the Pi expect several hours in total. It's resumable, so an interruption only loses the current image.
+
+**Keeping the card images (optional):** set `"image_cache_dir"` in `/etc/localsorter.json` (for example
+`/var/lib/localsorter/image-cache`) and the sync keeps every image it downloads there. Only images that changed are
+downloaded again, which makes re-indexing (after a recognition update, for example) offline-fast. Expect ~7 GB.
+To put it on a USB drive instead (if the SD card is small), also add that folder to `ReadWritePaths=` in
+`/etc/systemd/system/localsorter-sync.service`, then run `sudo systemctl daemon-reload`.
 After that, the nightly sync only fetches prices plus whatever new cards and changed images appeared.
 
 ## Your scans
@@ -129,6 +135,7 @@ Open `\\magic-sorter-INSER\Public\scans` from your PC (user `pi`, password
 | Path | Contents |
 |---|---|
 | `2026-10-14/scans.csv` | one row per card: time, name, set, number, rarity, price, TCGplayer and Scryfall ids, match distance |
+| | prices are the day's Scryfall prices; the sorter's price-trend rules use a smoothed 7-day average instead, so one odd day doesn't move a card to another bin |
 | `2026-10-14/images/<uuid>.jpg` | the photo of each card (kept 30 days by default) |
 | `sessions/results_*.csv` | the sorter's own end-of-run summaries (never auto-deleted here) |
 
@@ -146,6 +153,8 @@ Open **`http://magic-sorter-INSER.local:8766`** (or the Pi's IP address, port 87
 2. **You review** them here, then press **Resume** on the touchscreen. Press **Stop** to finish without re-sorting.
 3. **The machine sorts them again.** It measures the bin like a feeder, pulls the cards back out from the top, and sorts each one with your verdict. Pile order says which reviewed scan each card is, and a photo comparison confirms it.
 4. **Cards still unresolved** go to the other bin for unrecognised cards, and the next pause offers another round.
+
+While the sorter waits for you, and while it re-sorts, a banner at the top of this page says so (and how many cards are left).
 
 Two identical-looking copies reviewed as different printings can't be told apart from a photo if the pile was disturbed. They go back to the manual check rather than being guessed.
 It needs two bins for unrecognised cards: one is emptied while the other catches what still can't be sorted.

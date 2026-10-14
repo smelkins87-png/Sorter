@@ -35,7 +35,14 @@ CREATE TABLE IF NOT EXISTS cards (
     frame            TEXT,               -- 1993, 1997, 2003, 2015, future
     finishes         TEXT,               -- JSON list: nonfoil, foil, etched
     border_color     TEXT,
-    promo            INTEGER DEFAULT 0
+    promo            INTEGER DEFAULT 0,
+    -- Price trend: 7-day exponential moving average, updated once a day by
+    -- the sync (update_trends). The sorter's "price_trend" field
+    trend_usd        REAL,
+    trend_usd_foil   REAL,
+    trend_eur        REAL,
+    trend_eur_foil   REAL,
+    trend_day        TEXT
 );
 CREATE INDEX IF NOT EXISTS cards_set ON cards (set_code);
 CREATE INDEX IF NOT EXISTS cards_oracle ON cards (oracle_id);
@@ -107,7 +114,29 @@ def connect(path):
 
 # Columns added after the first release: (name, type)
 _ADDED_COLUMNS = [("frame", "TEXT"), ("finishes", "TEXT"), ("border_color", "TEXT"),
-                  ("promo", "INTEGER DEFAULT 0")]
+                  ("promo", "INTEGER DEFAULT 0"), ("trend_usd", "REAL"), ("trend_usd_foil", "REAL"),
+                  ("trend_eur", "REAL"), ("trend_eur_foil", "REAL"), ("trend_day", "TEXT")]
+
+# Weight of a new day's price in the trend: a 7-day exponential moving
+# average (2 / (7 + 1)). Smooths out one-day spikes in the market price
+TREND_ALPHA = 0.25
+_TRENDED = (("trend_usd", "usd"), ("trend_usd_foil", "usd_foil"), ("trend_eur", "eur"), ("trend_eur_foil", "eur_foil"))
+
+
+def update_trends(conn, day, alpha=TREND_ALPHA):
+    """Folds today's prices into each card's trend, once per day. Cards
+    without a trend yet start at today's price; a missing price leaves the
+    trend as it was."""
+    sets = ", ".join(
+        "%(t)s = CASE WHEN %(p)s IS NULL THEN %(t)s WHEN %(t)s IS NULL THEN %(p)s "
+        "ELSE ROUND(:a * %(p)s + (1 - :a) * %(t)s, 4) END" % {"t": trend, "p": price}
+        for trend, price in _TRENDED)
+
+    with conn:
+        cursor = conn.execute("UPDATE cards SET %s, trend_day = :day WHERE trend_day IS NULL OR trend_day <> :day"
+                              % sets, {"a": alpha, "day": day})
+
+    return cursor.rowcount
 
 
 _ADDED_SET_COLUMNS = [("parent_code", "TEXT")]
@@ -309,6 +338,22 @@ def price_for(row, foil, currency="usd"):
     return None
 
 
+def trend_for(row, foil, currency="usd"):
+    """The trend matching price_for(): same finish fallbacks, None if the
+    database predates trends or none was computed yet."""
+    keys = row.keys() if hasattr(row, "keys") else ()
+
+    if "trend_usd" not in keys:
+        return None
+
+    if currency == "eur":
+        order = ("trend_eur_foil", "trend_eur") if foil else ("trend_eur", "trend_eur_foil")
+    else:
+        order = ("trend_usd_foil", "trend_usd") if foil else ("trend_usd", "trend_usd_foil")
+
+    return next((row[c] for c in order if row[c] is not None), None)
+
+
 def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
     """Builds the card dict the Magic Sorter firmware expects from its API.
 
@@ -318,6 +363,8 @@ def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
     """
     colors = [COLOR_WORDS[c] for c in json.loads(row["colors"] or "[]") if c in COLOR_WORDS]
     price = price_for(row, foil, currency)
+    trend = trend_for(row, foil, currency)
+    trend = price if trend is None else trend
     cmc = row["cmc"]
 
     extra = {
@@ -343,7 +390,7 @@ def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
         "foil": int(foil or 0),
         "condition": condition,
         "price": round(price, 2) if price is not None else 0.0,
-        "price_trend": round(price, 2) if price is not None else 0.0,
+        "price_trend": round(trend, 2) if trend is not None else 0.0,
         "ext_id": row["id"],
         "ecommerce_id": row["tcgplayer_id"] or 0,
         "detect_set": 1,

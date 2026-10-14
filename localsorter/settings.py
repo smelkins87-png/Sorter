@@ -29,6 +29,10 @@ class Settings:
     # Scryfall image size used to build the recognition index: "small"
     # (146x204, ~10 KB each) is plenty for perceptual hashing
     index_image_size: str = "small"
+    # Keep every downloaded Scryfall image here ("" = don't keep them): ~1.3 GB
+    # small + ~6 GB normal images. Lets the reference data be rebuilt offline.
+    # Outside data_dir, add the folder to ReadWritePaths in the systemd units
+    image_cache_dir: str = ""
     download_workers: int = 4
     # Delay between image downloads per worker (seconds), to be polite
     download_delay: float = 0.1

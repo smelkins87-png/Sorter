@@ -197,3 +197,11 @@ def test_password(env):
         env.port = port
         server.shutdown()
         server.server_close()
+
+
+def test_sorter_status_feeds_the_banner(env):
+    status, _, body = get(env, "/api/status")
+    assert status == 200 and json.loads(body) == {"waiting_review": None, "resorting": None}
+
+    env.review.status = lambda: {"waiting_review": {"cards": 4, "position": 5, "since": "12:00"}, "resorting": None}
+    assert json.loads(get(env, "/api/status")[2])["waiting_review"]["cards"] == 4

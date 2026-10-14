@@ -42,6 +42,8 @@ def cmd_prices(settings, args):
 
     carddb.set_meta(conn, "bulk_updated_at", info.get("updated_at"))
     carddb.set_meta(conn, "prices_updated", carddb.now_iso())
+    updated = carddb.update_trends(conn, time.strftime("%Y-%m-%d"))
+    log.info("Price trends updated for %d cards", updated)
     carddb.set_meta(conn, "data_version", carddb.now_iso())
 
     return conn
@@ -52,6 +54,10 @@ def cmd_index(settings, args, conn=None):
     limit = getattr(args, "limit", None)
     common = dict(workers=settings.download_workers, delay=settings.download_delay,
                   include_digital=settings.include_digital, limit=limit)
+
+    if settings.image_cache_dir:
+        common["fetch"] = scryfall.ImageCache(settings.image_cache_dir)
+        log.info("Keeping downloaded images in %s", settings.image_cache_dir)
     results = []
 
     for label, build, size in (("hashed", indexer.build, settings.index_image_size),

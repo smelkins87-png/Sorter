@@ -80,6 +80,9 @@ class App:
         self.resolver = resolver if resolver is not None else PrintingResolver(
             self.conn, self.db_lock, tesseract, settings.ocr, settings.region_margin, settings.border_check)
         self.resort = None
+        # Set by the plugin while the sorter is paused for a review of the
+        # manual-check bin: {"cards": n, "position": i, "since": iso time}
+        self.waiting_review = None
         self._data_version = carddb.get_meta(self.conn, "data_version")
         self._last_check = time.monotonic()
 
@@ -268,10 +271,28 @@ class App:
             self.conn.executescript(LABELS_SCHEMA)
 
         self.resort = ResortSession(self.settings.export_dir, self.conn, self.db_lock, uuids)
+        self.waiting_review = None
         return 200, {"result": "ok", "cards": len(self.resort.queue)}
+
+    def resort_waiting(self, data):
+        try:
+            cards = max(0, int(data.get("cards") or 0))
+        except (AttributeError, TypeError, ValueError):
+            return 400, {"error": "cards must be a number"}
+
+        self.waiting_review = {"cards": cards, "position": data.get("position"),
+                               "since": time.strftime("%H:%M")} if cards else None
+        return 200, {"result": "ok"}
+
+    def sorter_status(self):
+        """For the review page's banner."""
+        resort = self.resort
+        return {"waiting_review": self.waiting_review,
+                "resorting": {"left": len(resort.queue)} if resort is not None else None}
 
     def resort_stop(self):
         self.resort = None
+        self.waiting_review = None
         log.info("Re-sort finished")
         return 200, {"result": "ok"}
 
@@ -517,6 +538,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parts == ["resort", "stop"]:
                 return self._send(*self.app.resort_stop())
+
+            if parts == ["resort", "waiting"]:
+                return self._send(*self.app.resort_waiting(json.loads(body or b"{}")))
 
             if parts == ["sendlog"]:
                 files = parse_multipart(self.headers.get("Content-Type", ""), body)
