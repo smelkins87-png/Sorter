@@ -65,6 +65,12 @@ class Settings:
     # unrecognised cards), "pause" the sorter, or just "warn" in the log
     verify_mismatch_action: str = "manual_bin"
 
+    # Review page (check and correct scans from a PC or phone on the local
+    # network). 0 switches it off; an empty password means no password
+    review_host: str = "0.0.0.0"
+    review_port: int = 8766
+    review_password: str = ""
+
     # Price returned to the sorter: "usd" (TCGplayer market via Scryfall) or "eur"
     price_currency: str = "usd"
 

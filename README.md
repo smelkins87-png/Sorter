@@ -132,6 +132,18 @@ Open `\\magic-sorter-INSER\Public\scans` from your PC (user `pi`, password
 | `2026-10-14/images/<uuid>.jpg` | the photo of each card (kept 30 days by default) |
 | `sessions/results_*.csv` | the sorter's own end-of-run summaries (never auto-deleted here) |
 
+## Review page
+
+Open **`http://magic-sorter-INSER.local:8766`** (or the Pi's IP address, port 8766) from a PC or phone on your network:
+- **Needs check:** cards that weren't recognised, cards whose set wasn't confirmed, and cards the second photo disagreed with (the manual-check bin).
+- **✓ Correct:** confirms a card. **✎ Fix** lists every printing of the card with its set-symbol close-up next to your photo, plus a name search when it's a different card altogether.
+- **Download collection CSV:** the day's cards with your corrections applied.
+- **Tuning data:** every verdict is written to that day's `labels.csv`, which `python3 -m localsorter eval` reads directly.
+
+The page works offline. It uses no web fonts or online card images, so reviewing tells nobody what's in your collection.
+To add a password, set `"review_password"` in `/etc/localsorter.json` (any user name works) and run `sudo systemctl restart localsorter`.
+To turn the page off, set `"review_port": 0`.
+
 ## Tuning and testing
 
 Settings live in `/etc/localsorter.json` (see `localsorter/settings.py`). Restart after changes:

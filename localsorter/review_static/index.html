@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sorter Review</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="art" aria-hidden="true"></div>
+
+  <header class="bar">
+    <div class="brand">
+      <h1>Sorter Review</h1>
+      <p class="tagline">Every card checked. No vendor, no cloud.</p>
+    </div>
+    <label class="day">
+      <span>Day</span>
+      <select id="day"></select>
+    </label>
+  </header>
+
+  <section class="stats" id="stats" aria-live="polite"></section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-filter="check" role="tab">Needs check <span class="count" id="count-check"></span></button>
+    <button class="tab" data-filter="all" role="tab">All <span class="count" id="count-all"></span></button>
+    <button class="tab" data-filter="reviewed" role="tab">Reviewed <span class="count" id="count-reviewed"></span></button>
+    <a class="export" id="export" href="#" download>Download collection CSV</a>
+  </nav>
+
+  <main id="grid" class="grid"></main>
+  <p class="empty" id="empty" hidden></p>
+
+  <footer class="foot">Sorted at the speed of sound · corrections feed <code>localsorter eval</code></footer>
+
+  <dialog id="fix">
+    <form method="dialog" class="fix">
+      <div class="fix-photos">
+        <figure>
+          <img id="fix-photo" alt="Scan">
+          <figcaption>The scan</figcaption>
+        </figure>
+        <figure id="fix-drop-box" hidden>
+          <img id="fix-drop" alt="Second photo, after the drop">
+          <figcaption>Second photo: top of the pile after the drop</figcaption>
+        </figure>
+        <p class="fix-why" id="fix-why"></p>
+      </div>
+      <div class="fix-pick">
+        <h2 id="fix-title">Which printing is it?</h2>
+        <ul class="printings" id="printings"></ul>
+        <label class="search">
+          <span>Different card?</span>
+          <input id="search" type="search" placeholder="Search by name" autocomplete="off">
+        </label>
+        <ul class="results" id="results"></ul>
+        <div class="fix-actions">
+          <button type="button" class="ghost" id="not-card">Not a card / unreadable</button>
+          <button value="cancel" class="ghost">Cancel</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

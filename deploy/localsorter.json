@@ -17,6 +17,9 @@
   "region_margin": 8.0,
   "border_check": true,
   "verify_mismatch_action": "manual_bin",
+  "review_host": "0.0.0.0",
+  "review_port": 8766,
+  "review_password": "",
   "price_currency": "usd",
   "include_digital": false
 }

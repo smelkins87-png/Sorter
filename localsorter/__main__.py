@@ -92,6 +92,11 @@ def cmd_serve(settings, args):
     if not len(app.index):
         log.warning("The recognition index is empty: run `python3 -m localsorter sync` first")
 
+    if settings.review_port:
+        from .review import start_review_server
+
+        start_review_server(app, settings)
+
     server = make_server(app, settings.listen_host, settings.listen_port)
     log.info("Listening on http://%s:%d (%d reference images)", settings.listen_host,
              settings.listen_port, len(app.index))
