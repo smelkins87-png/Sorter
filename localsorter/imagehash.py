@@ -12,6 +12,7 @@ Scryfall's reference images get the exact same treatment, so the Hamming
 distance between hashes measures visual difference.
 """
 import io
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image, ImageOps
@@ -83,17 +84,26 @@ def load_image(data, min_side=None):
     """Decodes an image. With min_side, JPEGs are decoded at a reduced scale
     (libjpeg DCT scaling, much faster than decode + resize) while keeping the
     longest side at least min_side pixels."""
+    return _open(data, min_side)[0]
+
+
+def _open(data, min_side=None):
+    """(RGB image, size of the image at full resolution)"""
     image = Image.open(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data)
+
+    # Phone photos may need rotating; decode those at full size (rare path).
+    # Sorter camera frames carry no EXIF orientation
+    if image.getexif().get(0x0112, 1) != 1:
+        image = ImageOps.exif_transpose(image)
+        return image.convert("RGB"), image.size
+
+    full_size = image.size
 
     if min_side and image.format == "JPEG":
         scale = max(1, max(image.size) // min_side)
         image.draft("RGB", (image.width // scale, image.height // scale))
 
-    # Camera frames carry no EXIF orientation; skip the extra copy then
-    if image.getexif().get(0x0112, 1) != 1:
-        image = ImageOps.exif_transpose(image)
-
-    return image.convert("RGB")
+    return image.convert("RGB"), full_size
 
 
 def reference_hashes(data):
@@ -121,15 +131,100 @@ def find_card(image):
     CARD_W x CARD_H. Falls back to a centred crop at card ratio when no
     convincing outline is found (or OpenCV is unavailable)."""
     if cv2 is not None:
-        warped = _find_card_cv(image)
+        corners = _find_corners(image)
 
-        if warped is not None:
-            return warped
+        if corners is not None:
+            return _warp(np.asarray(image), corners, (0, 0, 1, 1), CARD_W)
 
     return _center_crop(image)
 
 
-def _find_card_cv(image):
+@dataclass
+class Located:
+    """A card found in a sorter photo.
+
+    `card` is the CARD_W x CARD_H portrait used for hashing. `corners` are the
+    card's TL, TR, BR, BL corners (in `card`'s orientation) in full-resolution
+    pixel coordinates of the original photo, or None when the outline was not
+    found. With them, any part of the card can be cut out sharply later (see
+    region())."""
+    data: bytes
+    card: Image.Image
+    corners: np.ndarray = None
+    _full: np.ndarray = None
+
+    def rotated(self):
+        """Same card turned 180 degrees."""
+        corners = None if self.corners is None else np.roll(self.corners, 2, axis=0)
+
+        return Located(self.data, self.card.rotate(180), corners, self._full)
+
+    def full_image(self):
+        if self._full is None:
+            self._full = np.asarray(_open(self.data)[0])
+
+        return self._full
+
+    def region(self, box, card_width):
+        """Cuts box (x0, y0, x1, y1 as fractions of the card) out of the
+        full-resolution photo, in a card space card_width pixels wide."""
+        if self.corners is None or cv2 is None:
+            return None
+
+        return _warp(self.full_image(), self.corners, box, card_width)
+
+
+def locate(data):
+    # The card ends up 252x352 for hashing: ~1000 px of camera frame is plenty
+    image, full_size = _open(data, min_side=1000)
+    corners = _find_corners(image) if cv2 is not None else None
+
+    if corners is None:
+        return Located(data, _center_crop(image))
+
+    card = _warp(np.asarray(image), corners, (0, 0, 1, 1), CARD_W)
+    scale = np.array([full_size[0] / image.width, full_size[1] / image.height], dtype=np.float32)
+
+    return Located(data, card, corners * scale)
+
+
+def card_height(card_width):
+    return card_width * CARD_H / CARD_W
+
+
+def _warp(rgb, corners, box, card_width):
+    """Perspective-correct crop of `box` (card fractions) from an image whose
+    card corners are known. Output is in a card space card_width wide."""
+    card_h = card_height(card_width)
+    target = np.array([[0, 0], [card_width, 0], [card_width, card_h], [0, card_h]], dtype=np.float32)
+    matrix = cv2.getPerspectiveTransform(np.asarray(corners, dtype=np.float32), target)
+
+    x0, y0 = box[0] * card_width, box[1] * card_h
+    width = max(1, int(round((box[2] - box[0]) * card_width)))
+    height = max(1, int(round((box[3] - box[1]) * card_h)))
+    shift = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=np.float64)
+
+    # Shrinking (hashing) wants area averaging; enlarging (text) wants cubic
+    source_width = np.linalg.norm(np.asarray(corners[1]) - np.asarray(corners[0]))
+    flags = cv2.INTER_AREA if source_width > card_width else cv2.INTER_CUBIC
+    warped = cv2.warpPerspective(rgb, shift @ matrix, (width, height), flags=flags,
+                                 borderMode=cv2.BORDER_REPLICATE)
+
+    return Image.fromarray(warped)
+
+
+def reference_region(image, box, card_width):
+    """Same as Located.region() for a Scryfall image (the image is the card)."""
+    if image.width > image.height:
+        image = image.rotate(90, expand=True)
+
+    w, h = image.size
+    corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
+
+    return _warp(np.asarray(image), corners, box, card_width)
+
+
+def _find_corners(image):
     rgb = np.asarray(image)
     scale = 800.0 / max(rgb.shape[:2])
     small = cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) if scale < 1 else rgb
@@ -176,11 +271,7 @@ def _find_card_cv(image):
         # Landscape on camera: rotate corner order so the long side is vertical
         corners = np.roll(corners, -1, axis=0)
 
-    target = np.array([[0, 0], [CARD_W - 1, 0], [CARD_W - 1, CARD_H - 1], [0, CARD_H - 1]], dtype=np.float32)
-    matrix = cv2.getPerspectiveTransform(corners, target)
-    warped = cv2.warpPerspective(rgb, matrix, (CARD_W, CARD_H), flags=cv2.INTER_AREA)
-
-    return Image.fromarray(warped)
+    return corners
 
 
 def _center_crop(image):
@@ -206,8 +297,7 @@ def query_hashes(data):
 
     Returns a list of (full, art) pairs. The warp leaves the card portrait but
     can't know which end is the top, so we try 0 and 180 degrees."""
-    # The card ends up 252x352: ~1000 px of camera frame is plenty
-    card = find_card(load_image(data, min_side=1000))
+    card = locate(data).card
 
     return [card_hashes(card), card_hashes(card.rotate(180))]
 

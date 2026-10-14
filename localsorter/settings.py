@@ -42,6 +42,18 @@ class Settings:
     # (set is then reported as "not detected")
     set_margin: int = 4
 
+    # Telling apart printings that share artwork (see printing.py).
+    # Close-ups of set symbol + collector info are cut from this Scryfall
+    # image size for every such printing ("normal" is 488x680)
+    region_image_size: str = "normal"
+    # Read the collector info with Tesseract: "auto" (only when several
+    # printings look alike, or to detect foil/language), "always", or "off"
+    ocr: str = "auto"
+    tesseract_cmd: str = "tesseract"
+    # How much closer (mean Lab colour distance over the pixels where the
+    # printings differ) the winning printing's close-ups must be
+    region_margin: float = 6.0
+
     # Price returned to the sorter: "usd" (TCGplayer market via Scryfall) or "eur"
     price_currency: str = "usd"
 

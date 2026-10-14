@@ -1,8 +1,11 @@
-"""Downloads Scryfall card images and stores their hashes.
+"""Downloads Scryfall card images and stores what recognition needs.
 
-Resumable and incremental: only faces without a hash (new cards, or a
-previous run interrupted) are fetched. Images are hashed in memory and
-discarded, so the Pi's SD card only stores ~40 bytes per card.
+* hashes:  every card face (small image), ~40 bytes each
+* regions: set symbol + collector info close-ups (normal image), only for
+           printings that share their artwork with another printing, ~5 KB each
+
+Resumable and incremental: only faces without data (new cards, or a previous
+run interrupted) are fetched. Images are processed in memory and discarded.
 """
 import json
 import logging
@@ -10,42 +13,52 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import imagehash, scryfall
+from . import imagehash, printing, scryfall
 
 log = logging.getLogger("localsorter")
 
+# Printings that share artwork with another paper printing of the same card
+_LOOKALIKE = ("EXISTS (SELECT 1 FROM cards o WHERE o.oracle_id = c.oracle_id AND o.id <> c.id "
+              "AND o.digital = 0 AND (o.illustration_id = c.illustration_id "
+              "OR o.illustration_id IS NULL OR c.illustration_id IS NULL))")
 
-def pending_faces(conn, size, include_digital=False):
-    """(card_id, face, url) for every face image not hashed yet."""
+
+def _pending(conn, table, size, include_digital, only_lookalikes=False):
+    """(card_id, face, url) for every face image not processed yet, or whose
+    image changed since. Scryfall's image URLs carry a version suffix that
+    changes when e.g. a low-res preview is replaced by a proper scan."""
     query = ("SELECT c.id, c.image_front, c.image_back, "
-             "EXISTS(SELECT 1 FROM hashes h WHERE h.card_id = c.id AND h.face = 0) AS has_front, "
-             "EXISTS(SELECT 1 FROM hashes h WHERE h.card_id = c.id AND h.face = 1) AS has_back "
-             "FROM cards c")
+             "(SELECT x.source_url FROM %(t)s x WHERE x.card_id = c.id AND x.face = 0) AS done_front, "
+             "(SELECT x.source_url FROM %(t)s x WHERE x.card_id = c.id AND x.face = 1) AS done_back "
+             "FROM cards c WHERE 1 = 1" % {"t": table})
 
     if not include_digital:
-        query += " WHERE c.digital = 0"
+        query += " AND c.digital = 0"
+
+    if only_lookalikes:
+        query += " AND c.oracle_id IS NOT NULL AND " + _LOOKALIKE
 
     for row in conn.execute(query):
-        for face, column, done in ((0, "image_front", row["has_front"]), (1, "image_back", row["has_back"])):
-            if done or not row[column]:
+        for face, column, done_url in ((0, "image_front", row["done_front"]), (1, "image_back", row["done_back"])):
+            if not row[column]:
                 continue
 
             urls = json.loads(row[column])
-            url = urls.get(size) or urls.get("small") or urls.get("normal")
+            url = urls.get(size) or urls.get("normal") or urls.get("small")
 
-            if url:
+            if url and url != done_url:
                 yield row["id"], face, url
 
 
-def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit=None,
-          fetch=scryfall.download_bytes, progress=None):
-    todo = list(pending_faces(conn, size, include_digital))
+def pending_faces(conn, size, include_digital=False):
+    return _pending(conn, "hashes", size, include_digital)
 
-    if limit:
-        todo = todo[:limit]
 
-    log.info("%d card images to hash", len(todo))
+def pending_regions(conn, size, include_digital=False):
+    return _pending(conn, "regions", size, include_digital, only_lookalikes=True)
 
+
+def _run(conn, todo, process, insert_sql, workers, delay, fetch, progress):
     if not todo:
         return 0, 0
 
@@ -56,18 +69,16 @@ def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit
 
     def work(item):
         card_id, face, url = item
-        data = fetch(url)
-        full, art = imagehash.reference_hashes(data)
+        result = process(fetch(url))
 
         if delay:
             time.sleep(delay)
 
-        return card_id, face, url, full, art
+        return (card_id, face, url) + tuple(result)
 
     def flush():
         with db_lock, conn:
-            conn.executemany("INSERT OR REPLACE INTO hashes (card_id, face, source_url, full_hash, art_hash) "
-                             "VALUES (?, ?, ?, ?, ?)", batch)
+            conn.executemany(insert_sql, batch)
         batch.clear()
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -79,7 +90,7 @@ def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit
                 done += 1
             except Exception as error:  # keep going; the next run retries it
                 failed += 1
-                log.warning("Could not hash image: %s", error)
+                log.warning("Could not process image: %s", error)
 
             if len(batch) >= 500:
                 flush()
@@ -94,3 +105,25 @@ def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit
         progress(done, failed, len(todo))
 
     return done, failed
+
+
+def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit=None,
+          fetch=scryfall.download_bytes, progress=None):
+    """Perceptual hashes for every card face."""
+    todo = list(pending_faces(conn, size, include_digital))[:limit or None]
+    log.info("%d card images to hash", len(todo))
+
+    return _run(conn, todo, imagehash.reference_hashes,
+                "INSERT OR REPLACE INTO hashes (card_id, face, source_url, full_hash, art_hash) "
+                "VALUES (?, ?, ?, ?, ?)", workers, delay, fetch, progress)
+
+
+def build_regions(conn, size="normal", workers=4, delay=0.1, include_digital=False, limit=None,
+                  fetch=scryfall.download_bytes, progress=None):
+    """Set symbol + collector info close-ups for look-alike printings."""
+    todo = list(pending_regions(conn, size, include_digital))[:limit or None]
+    log.info("%d look-alike printings to cut close-ups from", len(todo))
+
+    return _run(conn, todo, printing.reference_regions,
+                "INSERT OR REPLACE INTO regions (card_id, face, source_url, symbol, bottom) "
+                "VALUES (?, ?, ?, ?, ?)", workers, delay, fetch, progress)

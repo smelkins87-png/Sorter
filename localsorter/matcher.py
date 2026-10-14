@@ -24,14 +24,23 @@ class Match:
     set_detected: bool = True
     rotated: bool = False
     candidates: list = field(default_factory=list)
+    # The card as found in the photo, turned the right way up
+    located: object = None
+    # Filled in by printing.PrintingResolver
+    printing: dict = None
 
     def confidence(self):
-        return {
+        info = {
             "distance": self.distance,
             "margin": self.margin,
             "set_detected": self.set_detected,
             "candidates": self.candidates[:5],
         }
+
+        if self.printing:
+            info["printing"] = self.printing
+
+        return info
 
 
 class HashIndex:
@@ -87,8 +96,10 @@ class HashIndex:
         # distinctive part of a card and the least affected by framing
         return imagehash.hamming(full_hash, self.full) + 2 * imagehash.hamming(art_hash, self.art)
 
-    def identify(self, image_bytes, max_distance, min_margin, set_margin, allowed_sets=None):
-        queries = imagehash.query_hashes(image_bytes)
+    def identify(self, image, max_distance, min_margin, set_margin, allowed_sets=None):
+        """`image` is the photo's bytes or an imagehash.Located."""
+        located = image if isinstance(image, imagehash.Located) else imagehash.locate(image)
+        queries = [imagehash.card_hashes(located.card), imagehash.card_hashes(located.card.rotate(180))]
 
         with self._lock:
             if not self.card_ids:
@@ -114,7 +125,10 @@ class HashIndex:
                     best = (bool(rotated), dist)
 
             rotated, dist = best
-            return self._decide(dist, rotated, max_distance, min_margin, set_margin)
+            match = self._decide(dist, rotated, max_distance, min_margin, set_margin)
+            match.located = located.rotated() if rotated else located
+
+            return match
 
     def _decide(self, dist, rotated, max_distance, min_margin, set_margin):
         order = [int(i) for i in np.argsort(dist)[:50] if dist[i] != EXCLUDED]

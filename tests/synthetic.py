@@ -5,11 +5,17 @@ search, decisions). They do NOT measure real-world accuracy: that needs real
 scans from the sorter (see `python3 -m localsorter eval`).
 """
 import io
+import math
 import random
 
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 W, H = 488, 680
+
+FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+RARITY_COLOURS = {"common": (25, 25, 25), "uncommon": (165, 180, 195), "rare": (205, 165, 60),
+                  "mythic": (225, 95, 30)}
+RARITY_LETTER = {"common": "C", "uncommon": "U", "rare": "R", "mythic": "M"}
 
 
 def make_card(seed, art_seed=None):
@@ -60,6 +66,57 @@ def make_card(seed, art_seed=None):
     return img
 
 
+def make_printing(seed, set_code, number, rarity="common", symbol_seed=None, total=None, lang="EN",
+                  foil=False, frame="2015", art_seed=None, scale=3, artist="Jane Doe"):
+    """A specific printing: same card + art as make_card(seed, art_seed), plus
+    a set symbol and the collector info of its frame, drawn sharply at
+    `scale` x the reference size (real sorter photos are ~3x Scryfall's
+    "normal" image)."""
+    base = make_card(seed, art_seed if art_seed is not None else seed)
+    img = base.resize((W * scale, H * scale), Image.BICUBIC)
+    d = ImageDraw.Draw(img)
+    s = scale
+
+    # Set symbol at the right end of the type line, in rarity colour
+    rng = random.Random(symbol_seed if symbol_seed is not None else set_code)
+    cx, cy, radius = 0.885 * W * s, 0.587 * H * s, 0.032 * W * s
+    points = []
+    count = rng.randint(5, 9)
+    for k in range(count):
+        angle = 2 * math.pi * k / count + rng.uniform(-0.3, 0.3)
+        r = radius * rng.uniform(0.45, 1.0)
+        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+    d.polygon(points, fill=RARITY_COLOURS[rarity], outline=(0, 0, 0), width=max(1, s))
+
+    if frame in ("2015", "2003"):
+        # Thick black bottom border carrying the info text
+        d.rectangle((0, int(0.915 * H * s), W * s, H * s), fill=(12, 12, 12))
+        font = ImageFont.truetype(FONT, int(0.019 * H * s))
+        x = int(0.045 * W * s)
+        y1, y2 = int(0.922 * H * s), int(0.953 * H * s)
+        white = (235, 235, 235)
+
+        if frame == "2015":
+            line1 = ("%s/%s %s" % (number, total, RARITY_LETTER[rarity])) if total else \
+                    "%s %s" % (number, RARITY_LETTER[rarity])
+            line2 = "%s %s %s  %s" % (set_code, "\u2605" if foil else "\u2022", lang, artist)
+            d.text((x, y1), line1, font=font, fill=white)
+            d.text((x, y2), line2, font=font, fill=white)
+            d.text((int(0.62 * W * s), y1), "\u2122 & \u00a9 2018 Wizards of the Coast", font=font, fill=white)
+        else:
+            d.text((x, y1), "Illus. " + artist, font=font, fill=white)
+            right = "\u2122 & \u00a9 2009 Wizards  %s/%s" % (number, total or 249)
+            width = d.textlength(right, font=font)
+            d.text((W * s - x - width, y1), right, font=font, fill=white)
+
+    return img
+
+
+def reference(img, size=(W, H)):
+    """A Scryfall-like reference image (JPEG bytes) of a printing."""
+    return jpeg(img.resize(size, Image.LANCZOS), 85)
+
+
 def jpeg(img, quality=80):
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=quality)
@@ -72,14 +129,18 @@ def reference_bytes(card):
     return jpeg(card.resize((146, 204), Image.LANCZOS), 75)
 
 
-def photo(card, seed=0, angle=None, upside_down=False, landscape=False, brightness=None):
-    """Simulates the sorter's cropped camera frame of a card."""
+def photo(card, seed=0, angle=None, upside_down=False, landscape=False, brightness=None,
+          card_width=None, canvas_size=(1300, 1000), blur=0.8):
+    """Simulates the sorter's cropped camera frame of a card. The defaults
+    give a small, quick image; card_width=1200 with canvas_size=(2150, 1850)
+    matches the real camera crop."""
     rng = random.Random(seed)
-    canvas = Image.new("RGB", (1300, 1000), (rng.randint(150, 200),) * 3)
-    noise = Image.effect_noise((1300, 1000), 12).convert("RGB")
+    canvas = Image.new("RGB", canvas_size, (rng.randint(150, 200),) * 3)
+    noise = Image.effect_noise(canvas_size, 12).convert("RGB")
     canvas = Image.blend(canvas, noise, 0.15)
 
-    shot = card.resize((int(W * 1.25), int(H * 1.25)), Image.BICUBIC)
+    card_width = card_width or int(W * 1.25)
+    shot = card.resize((card_width, int(card_width * H / W)), Image.BICUBIC)
 
     if upside_down:
         shot = shot.rotate(180)
@@ -96,6 +157,6 @@ def photo(card, seed=0, angle=None, upside_down=False, landscape=False, brightne
 
     factor = rng.uniform(0.8, 1.15) if brightness is None else brightness
     canvas = ImageEnhance.Brightness(canvas).enhance(factor)
-    canvas = canvas.filter(ImageFilter.GaussianBlur(0.8))
+    canvas = canvas.filter(ImageFilter.GaussianBlur(blur))
 
     return jpeg(canvas, 85)

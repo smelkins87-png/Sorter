@@ -29,6 +29,8 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, carddb
 from .exporter import Exporter
 from .matcher import HashIndex
+from .ocr import Tesseract
+from .printing import PrintingResolver
 
 log = logging.getLogger("localsorter")
 
@@ -62,13 +64,16 @@ def parse_multipart(content_type, body):
 class App:
     """Holds the state shared by all request handler threads."""
 
-    def __init__(self, settings, conn=None, index=None, exporter=None):
+    def __init__(self, settings, conn=None, index=None, exporter=None, resolver=None):
         self.settings = settings
         self.conn = conn if conn is not None else carddb.connect(settings.db_path)
         self.index = index if index is not None else HashIndex.from_db(self.conn, settings.include_digital)
         self.exporter = exporter if exporter is not None else Exporter(settings.export_dir, settings.save_images,
                                              settings.image_retention_days, settings.price_currency)
         self.db_lock = threading.Lock()
+        tesseract = Tesseract(settings.tesseract_cmd) if settings.ocr != "off" else None
+        self.resolver = resolver if resolver is not None else PrintingResolver(
+            self.conn, self.db_lock, tesseract, settings.ocr, settings.region_margin)
         self._data_version = carddb.get_meta(self.conn, "data_version")
         self._last_check = time.monotonic()
 
@@ -105,9 +110,8 @@ class App:
         """Returns (status, payload) for POST /image/<game>."""
         condition = params.get("condition", ["NM"])[0]
         lang = params.get("lang", ["en"])[0]
+        # Sorter setting: 0 = no foils, 1 = all foil, 2 = detect
         foil_mode = int(params.get("foil", ["0"])[0] or 0)
-        # 1 = "all my cards are foil". 2 = "detect foil" is not possible from a
-        # single photo, so it is reported as non-foil
         foil = 1 if foil_mode == 1 else 0
 
         allowed = [s.strip() for s in params.get("set[]", []) if s.strip()]
@@ -123,13 +127,30 @@ class App:
         card = None
 
         if match.found:
-            row = self.card_row(match.card_id)
+            card_id, set_detected = match.card_id, match.set_detected
+
+            # Which printing? (set symbol, collector info)
+            try:
+                decision = self.resolver.resolve(match, foil_mode, lang, allowed or None)
+                card_id, set_detected = decision.card_id, decision.set_detected
+                foil = decision.foil if decision.foil is not None else foil
+                match.printing = dict(decision.evidence, method=decision.method)
+                detected_lang = decision.lang
+            except Exception:
+                log.exception("Printing check failed; keeping the hash match")
+                detected_lang = None
+
+            match.card_id, match.set_detected = card_id, set_detected
+            row = self.card_row(card_id)
 
             if row is not None:
-                card = carddb.to_api_card(row, foil=foil, condition=condition, lang=lang,
-                                          currency=s.price_currency)
+                card = carddb.to_api_card(row, foil=foil, condition=condition,
+                                          lang=lang if lang != "auto" else "en", currency=s.price_currency)
+                # What the card itself says beats the sorter's language setting
+                if detected_lang:
+                    card["lang"] = detected_lang
                 card["uuid"] = card_uuid
-                card["detect_set"] = 1 if match.set_detected else 0
+                card["detect_set"] = 1 if set_detected else 0
                 card["confidence"] = match.confidence()
 
         try:
@@ -141,8 +162,9 @@ class App:
             log.info("Not found (distance=%s margin=%s)", match.distance, match.margin)
             return 404, {"error": "Card not found", "uuid": card_uuid}
 
-        log.info("Matched %s (%s) #%s distance=%s margin=%s%s", card["title"], card["set"], card["num"],
-                 match.distance, match.margin, "" if match.set_detected else " set?")
+        log.info("Matched %s (%s) #%s distance=%s margin=%s via %s%s", card["title"], card["set"], card["num"],
+                 match.distance, match.margin, (match.printing or {}).get("method", "hash"),
+                 "" if match.set_detected else " set?")
 
         return 200, {"result": card}
 

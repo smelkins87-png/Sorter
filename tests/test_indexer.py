@@ -67,3 +67,19 @@ def test_build_limit():
     carddb.import_cards(conn, [scryfall_card(i) for i in range(5)])
 
     assert indexer.build(conn, delay=0, limit=2, fetch=_fetcher()) == (2, 0)
+
+
+def test_changed_image_is_processed_again():
+    conn = carddb.connect(":memory:")
+    card = scryfall_card(1)
+    carddb.import_cards(conn, [card])
+    indexer.build(conn, delay=0, fetch=_fetcher())
+
+    # Scryfall swaps a preview for a proper scan: the URL's version changes
+    card["image_uris"] = {"small": card["image_uris"]["small"] + "?1700000000"}
+    carddb.import_cards(conn, [card])
+    fetch = _fetcher()
+
+    assert indexer.build(conn, delay=0, fetch=fetch) == (1, 0)
+    assert fetch.calls == [card["image_uris"]["small"]]
+    assert conn.execute("SELECT COUNT(*) FROM hashes").fetchone()[0] == 1

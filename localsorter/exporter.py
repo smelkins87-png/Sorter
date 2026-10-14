@@ -23,7 +23,7 @@ log = logging.getLogger("localsorter")
 
 COLUMNS = ["timestamp", "uuid", "status", "title", "set", "set_name", "collector_number", "rarity",
            "lang", "foil", "condition", "price", "currency", "tcgplayer_id", "scryfall_id",
-           "distance", "margin", "set_detected", "image"]
+           "distance", "margin", "set_detected", "printing_method", "ocr_text", "image"]
 
 
 class Exporter:
@@ -78,6 +78,8 @@ class Exporter:
                 "distance": getattr(match, "distance", ""),
                 "margin": getattr(match, "margin", ""),
                 "set_detected": int(match.set_detected) if (match and card) else "",
+                "printing_method": (getattr(match, "printing", None) or {}).get("method", "") if card else "",
+                "ocr_text": (getattr(match, "printing", None) or {}).get("ocr_text", ""),
                 "image": image_rel,
             }
 

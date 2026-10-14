@@ -46,22 +46,27 @@ def cmd_prices(settings, args):
 
 def cmd_index(settings, args, conn=None):
     conn = conn or carddb.connect(settings.db_path)
-    started = time.monotonic()
+    limit = getattr(args, "limit", None)
+    common = dict(workers=settings.download_workers, delay=settings.download_delay,
+                  include_digital=settings.include_digital, limit=limit)
+    results = []
 
-    def progress(done, failed, total):
-        rate = done / max(time.monotonic() - started, 1)
-        log.info("  hashed %d/%d (%d failed, %.1f/s)", done, total, failed, rate)
+    for label, build, size in (("hashed", indexer.build, settings.index_image_size),
+                               ("close-ups", indexer.build_regions, settings.region_image_size)):
+        started = time.monotonic()
 
-    done, failed = indexer.build(conn, size=settings.index_image_size, workers=settings.download_workers,
-                                 delay=settings.download_delay, include_digital=settings.include_digital,
-                                 limit=getattr(args, "limit", None), progress=progress)
+        def progress(done, failed, total, label=label, started=started):
+            rate = done / max(time.monotonic() - started, 1)
+            log.info("  %s %d/%d (%d failed, %.1f/s)", label, done, total, failed, rate)
 
-    if done:
-        carddb.set_meta(conn, "data_version", carddb.now_iso())
+        done, failed = build(conn, size=size, progress=progress, **common)
+        log.info("%s: %d new images (%d failed; rerun to retry)", label.capitalize(), done, failed)
+        results.append((done, failed))
 
-    log.info("Hashed %d new images (%d failed; rerun to retry)", done, failed)
+        if done:
+            carddb.set_meta(conn, "data_version", carddb.now_iso())
 
-    return 1 if failed and not done else 0
+    return 1 if any(failed and not done for done, failed in results) else 0
 
 
 def cmd_prices_only(settings, args):

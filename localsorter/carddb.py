@@ -31,10 +31,15 @@ CREATE TABLE IF NOT EXISTS cards (
     edhrec_rank      INTEGER,
     legalities       TEXT,               -- JSON object
     image_front      TEXT,               -- JSON {size: url}
-    image_back       TEXT                -- JSON {size: url}, double faced only
+    image_back       TEXT,               -- JSON {size: url}, double faced only
+    frame            TEXT,               -- 1993, 1997, 2003, 2015, future
+    finishes         TEXT,               -- JSON list: nonfoil, foil, etched
+    border_color     TEXT,
+    promo            INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS cards_set ON cards (set_code);
 CREATE INDEX IF NOT EXISTS cards_oracle ON cards (oracle_id);
+CREATE INDEX IF NOT EXISTS cards_set_number ON cards (set_code, collector_number);
 
 CREATE TABLE IF NOT EXISTS sets (
     code        TEXT PRIMARY KEY,        -- upper case
@@ -52,6 +57,18 @@ CREATE TABLE IF NOT EXISTS hashes (
     source_url TEXT,
     full_hash  BLOB NOT NULL,
     art_hash   BLOB NOT NULL,
+    PRIMARY KEY (card_id, face)
+);
+
+-- Close-ups used to tell apart printings that share the same artwork:
+-- set symbol (colour PNG) and bottom info strip (greyscale PNG), cut from
+-- Scryfall's image in REGION_CARD_W-wide card space (see printing.py)
+CREATE TABLE IF NOT EXISTS regions (
+    card_id    TEXT NOT NULL,
+    face       INTEGER NOT NULL,
+    source_url TEXT,
+    symbol     BLOB NOT NULL,
+    bottom     BLOB NOT NULL,
     PRIMARY KEY (card_id, face)
 );
 
@@ -81,9 +98,26 @@ def connect(path):
     conn.row_factory = sqlite3.Row
     # WAL lets the nightly price sync write while the server keeps reading
     conn.execute("PRAGMA journal_mode=WAL")
+    _migrate(conn)
     conn.executescript(SCHEMA)
 
     return conn
+
+
+# Columns added after the first release: (name, type)
+_ADDED_COLUMNS = [("frame", "TEXT"), ("finishes", "TEXT"), ("border_color", "TEXT"),
+                  ("promo", "INTEGER DEFAULT 0")]
+
+
+def _migrate(conn):
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(cards)")}
+
+    if not existing:
+        return
+
+    for name, kind in _ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute("ALTER TABLE cards ADD COLUMN %s %s" % (name, kind))
 
 
 def _price(value):
@@ -151,13 +185,18 @@ def card_row(card):
         "legalities": json.dumps(card.get("legalities") or {}),
         "image_front": image_front,
         "image_back": image_back,
+        "frame": card.get("frame"),
+        "finishes": json.dumps(card.get("finishes") or []),
+        "border_color": card.get("border_color"),
+        "promo": 1 if card.get("promo") else 0,
     }
 
 
 CARD_COLUMNS = ["id", "oracle_id", "name", "printed_name", "lang", "set_code", "set_name",
                 "collector_number", "rarity", "colors", "type_line", "cmc", "released_at", "layout",
                 "illustration_id", "digital", "tcgplayer_id", "usd", "usd_foil", "usd_etched", "eur",
-                "eur_foil", "edhrec_rank", "legalities", "image_front", "image_back"]
+                "eur_foil", "edhrec_rank", "legalities", "image_front", "image_back", "frame", "finishes",
+                "border_color", "promo"]
 
 _UPSERT = "INSERT INTO cards (%s) VALUES (%s) ON CONFLICT(id) DO UPDATE SET %s" % (
     ", ".join(CARD_COLUMNS),
@@ -299,3 +338,32 @@ def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
         "detect_set": 1,
         "extra": json.dumps(extra),
     }
+
+
+def lookalikes(conn, card_id):
+    """Every paper printing that shares the card's artwork (same oracle card
+    and illustration), the card itself included. These can only be told apart
+    by set symbol and collector info."""
+    row = conn.execute("SELECT oracle_id, illustration_id FROM cards WHERE id = ?", (card_id,)).fetchone()
+
+    if row is None or row["oracle_id"] is None:
+        return [card_id]
+
+    if row["illustration_id"]:
+        rows = conn.execute("SELECT id FROM cards WHERE oracle_id = ? AND digital = 0 AND "
+                            "(illustration_id = ? OR illustration_id IS NULL)",
+                            (row["oracle_id"], row["illustration_id"])).fetchall()
+    else:
+        rows = conn.execute("SELECT id FROM cards WHERE oracle_id = ? AND digital = 0",
+                            (row["oracle_id"],)).fetchall()
+
+    ids = [r["id"] for r in rows]
+
+    return ids if card_id in ids else ids + [card_id]
+
+
+def finishes_of(row):
+    try:
+        return set(json.loads(row["finishes"] or "[]"))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return set()
