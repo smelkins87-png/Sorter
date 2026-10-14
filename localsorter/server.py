@@ -33,10 +33,12 @@ from urllib.parse import parse_qs, urlparse
 
 from . import __version__, carddb
 from .exporter import Exporter
+from .imagehash import locate
 from .matcher import HashIndex
 from .ocr import Tesseract
 from .printing import PrintingResolver
 from .resort import ResortSession
+from .stopcard import StopCards
 
 log = logging.getLogger("localsorter")
 
@@ -46,6 +48,10 @@ POPULAR_FORMATS = {"standard": "standard", "modern": "modern", "pioneer": "pione
                    "pauper": "pauper", "edh": "commander", "cedh": "commander"}
 POPULAR_LIMIT = 1000
 RELOAD_CHECK_SECONDS = 300
+# What the vendor's servers answered for the stop card (lib/matcher/matcher.py
+# checks the title; the rest keeps CardAttributes.from_camera_card happy)
+STOP_CARD = {"title": "stoptoken", "set": "", "num": "", "price": 0.0, "price_trend": 0.0, "foil": 0,
+             "extra": "{}", "detect_set": 1, "confidence": {}}
 MAX_UPLOAD = 25 * 1024 * 1024
 
 
@@ -84,6 +90,10 @@ class App:
         # Set by the plugin while the sorter is paused for a review of the
         # manual-check bin: {"cards": n, "position": i, "since": iso time}
         self.waiting_review = None
+        # The vendor app gives not-found cards its own uuid; the plugin asks
+        # for ours so the bin's records point at the saved photos
+        self.last_not_found = None
+        self.stop_cards = StopCards(self.conn, self.db_lock)
         self._data_version = carddb.get_meta(self.conn, "data_version")
         self._last_check = time.monotonic()
 
@@ -134,13 +144,22 @@ class App:
         card_uuid = str(uuid.uuid4())
         s = self.settings
 
+        # The card at the bottom of a feeder pile: that pile is done
+        located = None
+        if self.stop_cards:
+            located = locate(image)
+            if self.stop_cards.match(located):
+                log.info("Stop card: this feeder pile is done")
+                return 200, {"result": dict(STOP_CARD, uuid=card_uuid)}
+
         resort = self.resort
         if resort is not None:
-            answer = self._resort_answer(resort, image, card_uuid, condition, foil, lang)
+            located = located or locate(image)
+            answer = self._resort_answer(resort, located, image, card_uuid, condition, foil, lang)
             if answer is not None:
                 return answer
 
-        match = self.index.identify(image, s.max_distance, s.min_margin, s.set_margin, allowed or None)
+        match = self.index.identify(located or image, s.max_distance, s.min_margin, s.set_margin, allowed or None)
         card = None
 
         if match.found:
@@ -300,18 +319,13 @@ class App:
     def resort_stop(self):
         self.resort = None
         self.waiting_review = None
-        # The vendor app gives not-found cards its own uuid; the plugin asks
-        # for ours so the bin's records point at the saved photos
-        self.last_not_found = None
         log.info("Re-sort finished")
         return 200, {"result": "ok"}
 
-    def _resort_answer(self, resort, image, card_uuid, condition, foil, lang):
+    def _resort_answer(self, resort, located, image, card_uuid, condition, foil, lang):
         """The review page's verdict for a card pulled back out of the bin,
         or None to identify it the usual way."""
-        from .imagehash import locate
-
-        kind, label = resort.match(locate(image))
+        kind, label = resort.match(located)
 
         if kind in ("unknown", "unreviewed"):
             return None

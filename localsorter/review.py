@@ -30,6 +30,7 @@ from urllib.parse import parse_qs, urlparse
 from PIL import Image
 
 from . import __version__
+from .stopcard import StopCards
 
 log = logging.getLogger("localsorter")
 
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS labels (
     uuid       TEXT PRIMARY KEY,
     day        TEXT NOT NULL,
     card_id    TEXT,               -- NULL: not a card / unidentifiable
-    status     TEXT NOT NULL,      -- confirmed | corrected | not_a_card
+    status     TEXT NOT NULL,      -- confirmed | corrected | not_a_card | stop_card
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS labels_day ON labels (day);
@@ -103,6 +104,7 @@ class Review:
         # Callable giving the sorter's state (paused for review, re-sorting)
         self.status = status or (lambda: {"waiting_review": None, "resorting": None})
         self._csv_lock = threading.Lock()
+        self.stop_cards = StopCards(conn, db_lock)
         # Per-day counts for the day list, until the day's files or labels change
         self._days_cache = {}
         self._labels_version = 0
@@ -229,7 +231,7 @@ class Review:
             "found": len(found),
             "needs_check": sum(1 for s in scans if s["needs_check"] and not s["label"]),
             "confirmed": sum(1 for s in labelled if s["label"]["status"] == "confirmed"),
-            "corrected": sum(1 for s in labelled if s["label"]["status"] != "confirmed"),
+            "corrected": sum(1 for s in labelled if s["label"]["status"] in ("corrected", "not_a_card")),
             "value": round(value, 2),
             "currency": self.settings.price_currency.upper(),
         }
@@ -302,8 +304,17 @@ class Review:
         if not UUID_RE.match(uuid or ""):
             raise ValueError("Invalid scan id")
 
-        if status not in ("confirmed", "corrected", "not_a_card", "clear"):
+        if status not in ("confirmed", "corrected", "not_a_card", "stop_card", "clear"):
             raise ValueError("Invalid status")
+
+        if status == "stop_card":
+            # Learnt from the scan's photo (outside the label's transaction:
+            # it takes the database lock itself)
+            photo = self.image(day, uuid)
+            if photo is None:
+                raise ValueError("No photo kept for this scan")
+            self.stop_cards.add(uuid, day, photo)
+            card_id = None
 
         with self.db_lock, self.conn:
             if status == "clear":
@@ -318,6 +329,9 @@ class Review:
                     "ON CONFLICT(uuid) DO UPDATE SET card_id=excluded.card_id, status=excluded.status, "
                     "updated_at=excluded.updated_at",
                     (uuid, day, card_id, status, datetime.now().isoformat(timespec="seconds")))
+
+        if status != "stop_card":
+            self.stop_cards.remove(uuid)
 
         self._labels_version += 1
         self._write_labels_csv(day)
@@ -360,7 +374,7 @@ class Review:
             if s.get("resorted"):
                 continue
 
-            if label and label["status"] == "not_a_card":
+            if label and label["status"] in ("not_a_card", "stop_card"):
                 continue
 
             if label and label["card_id"] in cards:

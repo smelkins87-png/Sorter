@@ -94,6 +94,16 @@ During first-boot setup, before the lockdown is in place, the vendor software ma
 
 `sudo bash deploy/lockdown.sh --undo` puts everything back to the vendor setup.
 
+**Teach it your stop card (once, before sorting).** Each feeder pile ends with the stop card: when the
+sorter photographs it, that pile is done. The vendor's servers recognised it, so localsorter has to learn it:
+1. Put **only the stop card** in a feeder and start **Organize** on the touchscreen. It's photographed,
+   reported as "not found", and moved to the bin for unrecognised cards. Press **Stop**.
+2. On the review page, open that scan's **✎ Fix** and press **This is my stop card**.
+
+From then on it's recognised upright or upside down, never logged as a scan, and the feeder stops on it.
+Undo on the review page forgets it. Several stop cards can be taught the same way. The touchscreen's
+**Mess detector** setting relied on the vendor's servers too: leave it off.
+
 **Optional second photo after each drop (verifydrop):** switch it on in the touchscreen's
 **System settings → Available plugins**. It takes effect from the next card, no restart.
 - **What it does:** after each drop, the head moves the camera over the destination pile, using the same offset as the feeder photo, and photographs the top card. The local server checks it against the card that should be there.

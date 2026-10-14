@@ -127,12 +127,14 @@ function card(scan) {
   const label = scan.label;
   const shown = label && label.status === "corrected" ? label : scan;
   const title = label && label.status === "not_a_card" ? "Not a card"
+    : label && label.status === "stop_card" ? "Stop card"
     : shown.title || "Not recognised";
 
   const badges = [];
   if (label) {
     badges.push(el("span", { class: "badge " + (label.status === "confirmed" ? "ok" : "fix") },
-      label.status === "confirmed" ? "confirmed" : label.status === "corrected" ? "corrected" : "not a card"));
+      label.status === "confirmed" ? "confirmed" : label.status === "corrected" ? "corrected"
+        : label.status === "stop_card" ? "stop card: learnt" : "not a card"));
   } else {
     for (const reason of scan.reasons) badges.push(el("span", { class: "badge" }, reason));
   }
@@ -175,7 +177,8 @@ async function setLabel(scan, status, cardId) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ day: state.day, uuid: scan.uuid, status: status, card_id: cardId || null }),
     });
-    toast(status === "clear" ? "Undone" : status === "confirmed" ? "Confirmed" : "Saved");
+    toast(status === "clear" ? "Undone" : status === "confirmed" ? "Confirmed"
+      : status === "stop_card" ? "Stop card learnt: the sorter will recognise it from now on" : "Saved");
     await loadScans();
   } catch (error) {
     toast("Could not save: " + error.message);
@@ -241,6 +244,12 @@ $("not-card").addEventListener("click", async () => {
   const scan = state.editing;
   $("fix").close();
   await setLabel(scan, "not_a_card");
+});
+
+$("stop-card").addEventListener("click", async () => {
+  const scan = state.editing;
+  $("fix").close();
+  await setLabel(scan, "stop_card");
 });
 
 // --- the sorter's state ---------------------------------------------------------
