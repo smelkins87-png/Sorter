@@ -1,0 +1,16 @@
+{
+  "data_dir": "/var/lib/localsorter",
+  "listen_host": "127.0.0.1",
+  "listen_port": 8765,
+  "export_dir": "/home/pi/public/scans",
+  "save_images": true,
+  "image_retention_days": 30,
+  "index_image_size": "small",
+  "download_workers": 4,
+  "download_delay": 0.1,
+  "max_distance": 80,
+  "min_margin": 15,
+  "set_margin": 4,
+  "price_currency": "usd",
+  "include_digital": false
+}

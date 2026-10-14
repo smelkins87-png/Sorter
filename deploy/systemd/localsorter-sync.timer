@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly localsorter sync
+
+[Timer]
+OnCalendar=*-*-* 04:30
+RandomizedDelaySec=30min
+Persistent=true
+Unit=localsorter-sync.service
+
+[Install]
+WantedBy=timers.target

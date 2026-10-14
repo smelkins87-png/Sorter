@@ -1,0 +1,167 @@
+"""Minimal Scryfall client (stdlib only).
+
+Only public, anonymous endpoints are used. Nothing about the scanned cards is
+ever sent: the bulk file and the image downloads are identical for everyone.
+See https://scryfall.com/docs/api for the usage guidelines this follows.
+"""
+import codecs
+import gzip
+import json
+import time
+import urllib.request
+import zlib
+
+from . import __version__
+
+API = "https://api.scryfall.com"
+USER_AGENT = "localsorter/%s (self-hosted card sorter)" % __version__
+
+
+def _request(url, accept="application/json"):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT,
+        "Accept": accept,
+        "Accept-Encoding": "gzip",
+    })
+
+    return urllib.request.urlopen(req, timeout=60)
+
+
+def _decoded_stream(response):
+    """Wraps an HTTP response so reads return decompressed bytes."""
+    if response.headers.get("Content-Encoding", "").lower() == "gzip":
+        return gzip.GzipFile(fileobj=response)
+
+    return response
+
+
+def get_json(url):
+    with _request(url) as response:
+        return json.load(_decoded_stream(response))
+
+
+def bulk_info(kind="default_cards"):
+    """Returns the bulk-data descriptor (download_uri, updated_at, size...)."""
+    data = get_json(API + "/bulk-data/" + kind)
+
+    if data.get("object") != "bulk_data":
+        raise RuntimeError("Unexpected bulk-data response: %r" % data.get("object"))
+
+    return data
+
+
+def fetch_sets():
+    """All Scryfall sets (follows pagination)."""
+    url = API + "/sets"
+    sets = []
+
+    while url:
+        page = get_json(url)
+        sets.extend(page.get("data", []))
+        url = page.get("next_page") if page.get("has_more") else None
+
+        if url:
+            time.sleep(0.1)
+
+    return sets
+
+
+def iter_json_array(stream, chunk_size=1 << 20):
+    """Yields the elements of a top-level JSON array without loading it whole.
+
+    Scryfall's default_cards file is ~500 MB, too big to json.load() on a Pi.
+    Works for any formatting; only one element (plus a read chunk) is held in
+    memory at a time.
+    """
+    decoder = json.JSONDecoder()
+    raw = _text_reader(stream)
+    buf = ""
+    pos = 0
+    started = False
+    eof = False
+
+    while True:
+        # Skip whitespace and separators
+        while True:
+            while pos < len(buf) and buf[pos] in " \t\r\n,":
+                pos += 1
+
+            if pos < len(buf) or eof:
+                break
+
+            buf, pos, eof = _refill(raw, buf, pos, chunk_size)
+
+        if pos >= len(buf):
+            # An empty download must not look like "zero cards"
+            raise ValueError("Truncated JSON array" if started else "Empty JSON stream")
+
+        if not started:
+            if buf[pos] != "[":
+                raise ValueError("Expected a JSON array")
+
+            started = True
+            pos += 1
+            continue
+
+        if buf[pos] == "]":
+            return
+
+        try:
+            obj, end = decoder.raw_decode(buf, pos)
+        except json.JSONDecodeError:
+            if eof:
+                raise
+            buf, pos, eof = _refill(raw, buf, pos, chunk_size)
+            continue
+
+        # raw_decode can succeed on a prefix of a number ("3" of "3.25") at
+        # the buffer edge: only trust it once a delimiter follows
+        if not eof and (end == len(buf) or buf[end] not in " \t\r\n,]"):
+            buf, pos, eof = _refill(raw, buf, pos, chunk_size)
+            continue
+
+        yield obj
+        pos = end
+
+
+def _text_reader(stream):
+    """Incremental UTF-8 decoding reader over a binary stream."""
+    return codecs.getreader("utf-8")(stream)
+
+
+def _refill(raw, buf, pos, chunk_size):
+    chunk = raw.read(chunk_size)
+    buf = buf[pos:] + (chunk or "")
+
+    return buf, 0, not chunk
+
+
+def iter_bulk_cards(kind="default_cards"):
+    """Streams every card of a bulk file straight from Scryfall.
+
+    Returns (info, iterator). Nothing is written to disk, which spares the
+    Pi's SD card a 500 MB write every day.
+    """
+    info = bulk_info(kind)
+    response = _request(info["download_uri"], accept="*/*")
+
+    def _iter():
+        with response:
+            for card in iter_json_array(_decoded_stream(response)):
+                yield card
+
+    return info, _iter()
+
+
+def download_bytes(url, retries=3):
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            with _request(url, accept="image/*") as response:
+                return _decoded_stream(response).read()
+        except (OSError, zlib.error) as error:
+            last_error = error
+            time.sleep(1 + attempt * 2)
+
+    raise last_error

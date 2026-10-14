@@ -1,0 +1,25 @@
+[Unit]
+Description=localsorter nightly sync: Scryfall card data, prices and recognition index
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=localsorter
+Group=localsorter
+WorkingDirectory=/opt/localsorter
+Environment=PYTHONPATH=/opt/localsorter
+ExecStart=/usr/bin/python3 -m localsorter --config /etc/localsorter.json sync
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+MemoryMax=400M
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/localsorter /home/pi/public/scans
+PrivateTmp=yes
+# Group-writable files so the Samba user pi can tidy up scans
+UMask=0002

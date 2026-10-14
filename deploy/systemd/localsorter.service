@@ -1,0 +1,27 @@
+[Unit]
+Description=localsorter card recognition server (replaces the Magic Sorter cloud API)
+After=network.target
+Before=magicsorter_py.service
+
+[Service]
+Type=simple
+User=localsorter
+Group=localsorter
+WorkingDirectory=/opt/localsorter
+Environment=PYTHONPATH=/opt/localsorter
+ExecStart=/usr/bin/python3 -m localsorter --config /etc/localsorter.json serve
+Restart=always
+RestartSec=2
+MemoryMax=400M
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/localsorter /home/pi/public/scans
+PrivateTmp=yes
+# Group-writable files so the Samba user pi can tidy up scans
+UMask=0002
+
+[Install]
+WantedBy=multi-user.target
