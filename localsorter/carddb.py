@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS sets (
     released_at TEXT,
     set_type    TEXT,
     card_count  INTEGER,
-    digital     INTEGER DEFAULT 0
+    digital     INTEGER DEFAULT 0,
+    parent_code TEXT                     -- upper case; tokens/promos print it
 );
 
 -- One row per card face image. Hashes are packed bit arrays (see imagehash)
@@ -109,15 +110,19 @@ _ADDED_COLUMNS = [("frame", "TEXT"), ("finishes", "TEXT"), ("border_color", "TEX
                   ("promo", "INTEGER DEFAULT 0")]
 
 
+_ADDED_SET_COLUMNS = [("parent_code", "TEXT")]
+
+
 def _migrate(conn):
-    existing = {r[1] for r in conn.execute("PRAGMA table_info(cards)")}
+    for table, added in (("cards", _ADDED_COLUMNS), ("sets", _ADDED_SET_COLUMNS)):
+        existing = {r[1] for r in conn.execute("PRAGMA table_info(%s)" % table)}
 
-    if not existing:
-        return
+        if not existing:
+            continue
 
-    for name, kind in _ADDED_COLUMNS:
-        if name not in existing:
-            conn.execute("ALTER TABLE cards ADD COLUMN %s %s" % (name, kind))
+        for name, kind in added:
+            if name not in existing:
+                conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, kind))
 
 
 def _price(value):
@@ -243,14 +248,16 @@ def import_sets(conn, sets):
         "set_type": s.get("set_type"),
         "card_count": s.get("card_count"),
         "digital": 1 if s.get("digital") else 0,
+        "parent_code": (s.get("parent_set_code") or "").upper() or None,
     } for s in sets]
 
     with conn:
         conn.executemany(
-            "INSERT INTO sets (code, name, released_at, set_type, card_count, digital) "
-            "VALUES (:code, :name, :released_at, :set_type, :card_count, :digital) "
+            "INSERT INTO sets (code, name, released_at, set_type, card_count, digital, parent_code) "
+            "VALUES (:code, :name, :released_at, :set_type, :card_count, :digital, :parent_code) "
             "ON CONFLICT(code) DO UPDATE SET name=excluded.name, released_at=excluded.released_at, "
-            "set_type=excluded.set_type, card_count=excluded.card_count, digital=excluded.digital",
+            "set_type=excluded.set_type, card_count=excluded.card_count, digital=excluded.digital, "
+            "parent_code=excluded.parent_code",
             rows)
 
     return len(rows)

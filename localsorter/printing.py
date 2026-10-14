@@ -308,8 +308,10 @@ class PrintingResolver:
         ids = list(ids)
 
         with self.db_lock:
+            # parent_code: what tokens and promos print instead of their own code
             return {r["id"]: r for r in self.conn.execute(
-                "SELECT * FROM cards WHERE id IN (%s)" % ",".join("?" * len(ids)), ids)}
+                "SELECT c.*, s.parent_code FROM cards c LEFT JOIN sets s ON s.code = c.set_code "
+                "WHERE c.id IN (%s)" % ",".join("?" * len(ids)), ids)}
 
     def _regions(self, ids, face):
         ids = list(ids)

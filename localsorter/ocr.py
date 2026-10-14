@@ -105,8 +105,10 @@ def prepare(strip):
     return ImageOps.expand(gray, border=20, fill=255)
 
 
-# Where the collector info sits for each frame style
-SIDES = {"2015": "left", "future": "left", "2003": "right"}
+# Where the collector info sits for each frame style: two lines bottom left
+# since 2015; earlier, inside the copyright line ("... 41/155"), left of
+# centre (2003) or centred (1997), so the whole strip is read
+SIDES = {"2015": "left", "future": "left", "2003": "full", "1997": "full"}
 
 
 def read_bottom(located, tesseract, sides=("left", "right")):
@@ -122,6 +124,9 @@ def read_bottom(located, tesseract, sides=("left", "right")):
 
     if strip is None:
         return ""
+
+    if "full" in sides:
+        return tesseract.read(prepare(strip))
 
     halves = {"left": strip.crop((0, 0, strip.width // 2, strip.height)),
               "right": strip.crop((strip.width // 2, 0, strip.width, strip.height))}
@@ -161,8 +166,10 @@ def parse(text):
 
 
 def _number_forms(number):
-    """Ways a collector number can be printed: 7 -> 7, 07, 007, 0007."""
-    number = (number or "").upper()
+    """Ways a collector number can be printed: 7 -> 7, 07, 007, 0007.
+    "The List" reprints (Scryfall "CMA-100") print the original "100"."""
+    number = (number or "").upper().rsplit("-", 1)[-1]
+    number = re.sub(r"[^0-9A-Z]", "", number) or number
     digits = number.lstrip("0") or number
     forms = {canon(number), canon(digits)}
 
@@ -182,6 +189,17 @@ def score_candidates(text, candidates):
     raw_tokens = _TOKEN.findall(text)
     tokens = [canon(t) for t in raw_tokens]
     token_set = set(tokens)
+
+    # The bullet or star between set code and language is often read as
+    # another character and glued on: "WHOXEN", "CMA+*+EN", "MM3°*EN"
+    for raw in raw_tokens:
+        for piece in re.split(r"[^A-Za-z0-9]+", raw):
+            if len(piece) >= 2:
+                token_set.add(canon(piece))
+
+        glued = re.match(r"^([A-Za-z0-9]{2,5}?)(?:[^A-Za-z0-9]|[xX])*(%s)$" % "|".join(PRINTED_LANGS), raw)
+        if glued:
+            token_set.add(canon(glued.group(1)))
     # Numbers also appear glued to the total ("123/264") or rarity ("123R").
     # A lone one-character token ("1") is too easily a stray I, l or |, so
     # those only count when written as "1/249"
@@ -211,11 +229,22 @@ def score_candidates(text, candidates):
         score = 0.0
         reasons = []
         code = canon(row["set_code"])
+        keys = row.keys() if hasattr(row, "keys") else ()
 
-        # Promo sets (PDOM) usually print the parent code (DOM)
+        # Tokens, promos and special printings print their parent set's code
+        # (TC16 -> C16, PBFZ -> BFZ); "The List" prints the original set
+        # (collector number "CMA-100" -> CMA)
         codes = {code}
         if len(code) == 4 and code.startswith("P"):
             codes.add(code[1:])
+        if "parent_code" in keys and row["parent_code"]:
+            codes.add(canon(row["parent_code"]))
+        if "-" in (row["collector_number"] or ""):
+            listed = row["collector_number"].rsplit("-", 1)[0].upper()
+            codes.add(canon(listed))
+            # ...and a listed token or promo prints its parent (TBLB -> BLB)
+            if len(listed) == 4 and listed[0] in "TP":
+                codes.add(canon(listed[1:]))
 
         if codes & token_set:
             score += 3

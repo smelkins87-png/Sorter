@@ -284,3 +284,17 @@ def test_words_never_count_as_collector_numbers():
     # "IS" folds to "15" and "SO" to "50"; only tokens with a real digit can be numbers
     scores = ocr.score_candidates("THIS IS SO GOOD", [row("a", "XYZ", "15"), row("b", "XYZ", "50")])
     assert scores["a"][0] == 0 and scores["b"][0] == 0
+
+
+@pytest.mark.parametrize("text, card", [
+    ("U 0836\nWHOXEN > KEKAI KOTAKI", row("who", "WHO", "836", "uncommon")),
+    ("U 0720\nFDNX*EN > DANIEL", row("fdn", "FDN", "720", "uncommon")),
+    ("y 100/320 U\nCMA+*+EN NOAH BRADLEY", row("plst", "PLST", "CMA-100", "uncommon")),
+    ("yr 0007\nBLB + EN RHONDA LIBBEY", row("plst2", "PLST", "TBLB-7")),
+    ("016/021 T\nC16 ° EN BRAD RIGNEY", dict(row("tc16", "TC16", "16"), parent_code="C16")),
+])
+def test_printed_codes_that_differ_from_scryfalls(text, card):
+    """Real Tesseract readings of real cards: glued separators, The List
+    reprints and tokens printing their parent set's code."""
+    score, reasons = ocr.score_candidates(text, [card])[card["id"]]
+    assert "set code" in reasons and "number" in reasons, reasons
