@@ -52,6 +52,7 @@ the Linux partition, which Windows can't read.
 **2. Prepare the card from Windows.** A drive named **bootfs** appears:
 - **Leave `magicsorter_config.txt` as it is** (placeholder values). Without your real device id, secret and download id, the unit never identifies itself to the vendor, and the vendor's self-updater can't download anything. Keep your old card's copy on your PC in case you ever want the vendor cloud back. With the placeholders, the Pi is named `magic-sorter-INSER`.
 - Copy this repository onto bootfs as a folder named `localsorter`. On GitHub, use Code → Download ZIP, extract it, and rename the folder.
+- **Optional, saves hours:** copy `card-data\core` from the `card-data` branch into that folder, so it ends up as `localsorter\card-data\core` (41 MB). See "Prebuilt card data" below for the close-ups.
 
 **3. First boot in the sorter.** Insert the card and power on. The vendor's
 first-boot setup needs internet access: plug in Ethernet, or join the
@@ -126,9 +127,22 @@ Images on a black background blend best. The included artwork is SEGA's, so keep
 |---|---|---|
 | Card data and prices | ~80 MB compressed, ~119k printings; under a minute on a PC | ~180 MB database |
 | Fingerprints | ~113k small images, ~1.3 GB; about an hour on a PC | ~5 MB |
-| Printing close-ups | ~79k normal-size images (72% of printings share their art), ~6 GB | ~400 MB |
+| Printing close-ups | ~80k normal-size images (72% of printings share their art), ~6 GB | ~1.2 GB |
 
 On the Pi expect several hours in total. It's resumable, so an interruption only loses the current image.
+
+**Prebuilt card data (skips those hours).** The `card-data` branch holds all of the above, built
+on 14 October 2026: `card-data/core` (cards, prices, fingerprints, 41 MB) and `card-data/closeups`
+(1.3 GB in 14 pieces). Get it with Code → Download ZIP on that branch, or
+`git clone --depth 1 -b card-data https://github.com/smelkins87-png/Sorter card-data-download`.
+- `core` fits on the SD card: put it in `localsorter\card-data\core` on bootfs.
+- `closeups` doesn't (bootfs has about 400 MB free). After first boot, copy the `card-data` folder
+  into `\\magic-sorter-INSER\Public`, or onto a USB stick plugged into the Pi.
+- `install.sh` finds them, checks every piece's checksum and loads them (`python3 -m localsorter seed`).
+  A missing or damaged piece is named; copy it again and re-run the installer. The first sync then only
+  fetches newer prices and cards. Delete `card-data` from Public afterwards to free the space.
+
+To make fresh packages from any synced database: `python3 -m localsorter pack <folder>`.
 
 **Keeping the card images (optional):** set `"image_cache_dir"` in `/etc/localsorter.json` (for example
 `/var/lib/localsorter/image-cache`) and the sync keeps every image it downloads there. Only images that changed are
