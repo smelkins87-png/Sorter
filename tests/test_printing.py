@@ -7,6 +7,7 @@ switched on and off in turn: set-symbol and bottom-strip close-ups
 Synthetic cards only: they check the mechanics, not real-world accuracy.
 """
 import csv
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -22,6 +23,11 @@ from localsorter.settings import Settings
 
 from tests import synthetic
 from tests.helpers import scryfall_card
+
+# Tests that read the collector line need the tesseract program (the Pi gets
+# it from install.sh; a bare test machine may not have it)
+needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None,
+                                     reason="tesseract binary not installed")
 
 S = Settings()
 PHOTO = dict(card_width=1200, canvas_size=(2150, 1850))
@@ -110,6 +116,8 @@ def world():
         "ocr": PrintingResolver(no_regions, lock, tesseract, "auto"),
         "combined": PrintingResolver(conn, lock, tesseract, "auto"),
         "none": PrintingResolver(no_regions, lock, None, "off"),
+        # OCR switched on, but the tesseract program is missing
+        "ocr_missing": PrintingResolver(no_regions, lock, ocr.Tesseract("no-such-tesseract"), "auto"),
     }
 
     return SimpleNamespace(conn=conn, index=index, images=images, photos=photos, resolvers=resolvers,
@@ -140,6 +148,7 @@ def test_regions_only_picks_printing(world, code, orientation):
 
 # --- 2. OCR only (no close-ups in the database) ----------------------------
 
+@needs_tesseract
 @pytest.mark.parametrize("code,orientation", CASES_2015, ids=CASES_2015_IDS)
 def test_ocr_only_2015_frame_picks_printing(world, code, orientation):
     decision = _decide(world, "ocr", code, orientation)
@@ -147,6 +156,17 @@ def test_ocr_only_2015_frame_picks_printing(world, code, orientation):
     assert decision.card_id == _card_id(code), decision.evidence
     assert decision.set_detected, decision.evidence
     assert decision.method == "ocr", decision.evidence
+
+
+@pytest.mark.parametrize("code,orientation", CASES_2015[:2], ids=CASES_2015_IDS[:2])
+def test_missing_tesseract_never_guesses_the_printing(world, code, orientation):
+    decision = _decide(world, "ocr_missing", code, orientation)
+
+    # Same card, the printing honestly unconfirmed: flagged for the review page
+    oracle = lambda card_id: world.conn.execute("SELECT oracle_id FROM cards WHERE id = ?",
+                                                (card_id,)).fetchone()[0]
+    assert oracle(decision.card_id) == oracle(_card_id(code))
+    assert not decision.set_detected, decision.evidence
 
 
 @pytest.mark.parametrize("orientation", list(ORIENTATIONS))
@@ -317,6 +337,7 @@ def test_both_finishes_follow_foil_mode(extras, foil_mode, expected):
     assert decision.foil == expected
 
 
+@needs_tesseract
 def test_both_finishes_detect_foil_from_collector_info(extras):
     foil = extras.resolver.resolve(_extra_match(extras, "BTH", foil=True), foil_mode=2)
     nonfoil = extras.resolver.resolve(_extra_match(extras, "BTH", foil=False), foil_mode=2)
@@ -326,6 +347,7 @@ def test_both_finishes_detect_foil_from_collector_info(extras):
     assert nonfoil.foil == 0, nonfoil.evidence
 
 
+@needs_tesseract
 def test_printed_language_read_from_collector_info(extras):
     decision = extras.resolver.resolve(_extra_match(extras, "GER"), lang_hint="auto")
 
