@@ -105,6 +105,20 @@ else
     echo "Installed default settings to /etc/localsorter.json"
 fi
 
+step "Loading card data, if a card-data folder was copied over"
+# Looks on the SD card (bootfs), in the network folder (\\<sorter>\Public) and
+# on USB sticks; see localsorter/seed.py. Saves the first sync's hours of downloads
+DATA_DIR=$(PYTHONPATH=/opt/localsorter "$PY" -c \
+    'from localsorter.settings import Settings; print(Settings.load("/etc/localsorter.json").data_dir)')
+systemctl stop localsorter.service localsorter-sync.service 2>/dev/null || true
+if PYTHONPATH=/opt/localsorter "$PY" -m localsorter --config /etc/localsorter.json seed; then
+    chown -R localsorter:localsorter "$DATA_DIR"
+else
+    chown -R localsorter:localsorter "$DATA_DIR"
+    echo "The card-data folder couldn't be used (see the message above). Copy it again and re-run" >&2
+    echo "this installer, or carry on: the first sync downloads everything instead." >&2
+fi
+
 step "Installing systemd units"
 for unit in localsorter.service localsorter-sync.service localsorter-sync.timer; do
     install -m 0644 "deploy/systemd/$unit" "/etc/systemd/system/$unit"
@@ -119,8 +133,9 @@ echo "Timer and server enabled; server restarted"
 
 step "Done. Next steps"
 cat <<'EOF'
-1. Build the recognition index. The first sync takes hours (it downloads card
-   data and hashes every image), so start it and follow its progress:
+1. Build the recognition index. Start the first sync and follow its progress.
+   With a card-data folder loaded above, it only fetches today's prices and
+   anything newer (minutes); without one it downloads everything (hours):
      sudo systemctl start localsorter-sync.service
      journalctl -fu localsorter-sync
    or run it in the foreground as the service user:

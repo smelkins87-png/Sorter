@@ -90,6 +90,26 @@ def cmd_sync(settings, args):
     return cmd_index(settings, args, conn)
 
 
+def cmd_pack(settings, args):
+    from . import seed
+
+    seed.pack(settings.db_path, args.out)
+
+    return 0
+
+
+def cmd_seed(settings, args):
+    from . import seed
+
+    try:
+        seed.seed(settings.db_path, args.search or seed.SEARCH)
+    except ValueError as error:
+        log.error("Card data not loaded: %s", error)
+        return 1
+
+    return 0
+
+
 def cmd_serve(settings, args):
     from .server import App, make_server
 
@@ -255,6 +275,10 @@ def main(argv=None):
     p_index = sub.add_parser("index", help="hash card images not indexed yet")
     p_index.add_argument("--limit", type=int, help="stop after N images (testing)")
     sub.add_parser("serve", help="run the API server")
+    p_pack = sub.add_parser("pack", help="make card-data packages (core, closeups) from this database")
+    p_pack.add_argument("out", help="folder to write card-data into")
+    p_seed = sub.add_parser("seed", help="load card-data packages found on the SD card, network folder or USB")
+    p_seed.add_argument("search", nargs="*", help="folders to look in instead of the usual places")
     p_ident = sub.add_parser("identify", help="identify image files")
     p_ident.add_argument("images", nargs="+")
     p_ident.add_argument("--foil", type=int, default=0, help="sorter foil setting: 0 none, 1 all, 2 detect")
@@ -273,7 +297,8 @@ def main(argv=None):
         settings.data_dir = args.data_dir
 
     command = {"sync": cmd_sync, "prices": cmd_prices_only, "index": cmd_index,
-               "serve": cmd_serve, "identify": cmd_identify, "eval": cmd_eval}[args.command]
+               "serve": cmd_serve, "identify": cmd_identify, "eval": cmd_eval,
+               "pack": cmd_pack, "seed": cmd_seed}[args.command]
 
     return command(settings, args) or 0
 
