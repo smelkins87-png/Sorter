@@ -136,18 +136,42 @@ def _refill(raw, buf, pos, chunk_size):
     return buf, 0, not chunk
 
 
+def iter_json_lines(stream):
+    """Yields one JSON object per line (JSON Lines), skipping blank lines."""
+    for line in _text_reader(stream):
+        line = line.strip()
+
+        if line:
+            yield json.loads(line)
+
+
 def iter_bulk_cards(kind="default_cards"):
     """Streams every card of a bulk file straight from Scryfall.
 
     Returns (info, iterator). Nothing is written to disk, which spares the
-    Pi's SD card a 500 MB write every day.
+    Pi's SD card a large write every day. Scryfall serves the bulk files as
+    gzipped JSON Lines (jsonl_download_uri, ~80 MB); older responses had a
+    plain JSON array (download_uri), still understood.
     """
     info = bulk_info(kind)
-    response = _request(info["download_uri"], accept="*/*")
+    url = info.get("jsonl_download_uri") or info.get("download_uri")
+
+    if not url:
+        raise RuntimeError("Scryfall bulk-data response has no download link: %s" % sorted(info))
+
+    response = _request(url, accept="*/*")
 
     def _iter():
         with response:
-            for card in iter_json_array(_decoded_stream(response)):
+            stream = _decoded_stream(response)
+
+            # The file itself may be gzipped (.gz), on top of any transfer encoding
+            if url.split("?")[0].endswith(".gz"):
+                stream = gzip.GzipFile(fileobj=stream)
+
+            parse = iter_json_lines if "jsonl" in url.split("?")[0] else iter_json_array
+
+            for card in parse(stream):
                 yield card
 
     return info, _iter()

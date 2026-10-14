@@ -50,7 +50,7 @@ After writing, **Windows will offer to format a disk: click Cancel.** That's
 the Linux partition, which Windows can't read.
 
 **2. Prepare the card from Windows.** A drive named **bootfs** appears:
-- Copy `magicsorter_config.txt` from your *current* card's bootfs over the new one. It holds your device id; it's only needed if you ever switch back to the vendor cloud, and it names the Pi `magic-sorter-xxxxx`.
+- **Leave `magicsorter_config.txt` as it is** (placeholder values). Without your real device id, secret and download id, the unit never identifies itself to the vendor, and the vendor's self-updater can't download anything. Keep your old card's copy on your PC in case you ever want the vendor cloud back. With the placeholders, the Pi is named `magic-sorter-INSER`.
 - Copy this repository onto bootfs as a folder named `localsorter`. On GitHub, use Code → Download ZIP, extract it, and rename the folder.
 
 **3. First boot in the sorter.** Insert the card and power on. The vendor's
@@ -61,22 +61,36 @@ and reboots a few times. Wait until the touchscreen app is up.
 **4. Install, from your PC** (Windows Terminal or PowerShell; password `magicsorter`):
 
 ```
-ssh pi@magic-sorter-xxxxx.local
+ssh pi@magic-sorter-INSER.local
 passwd                                        # change the default password!
+sudo smbpasswd pi                             # ...and the network share's
 cd /boot/firmware/localsorter
 sudo bash deploy/install.sh                   # user, files, services, Tesseract
 sudo systemctl start localsorter-sync         # first sync: card data, image hashes and
 journalctl -fu localsorter-sync               #   printing close-ups (hours, resumable; Ctrl+C to stop watching)
 curl -s http://127.0.0.1:8765/status          # "indexed_images" should be ~100k when done
-sudo bash deploy/lockdown.sh                  # switch the sorter over + block vendor hosts
+sudo bash deploy/lockdown.sh                  # switch over, block the vendor, firewall
+sudo bash deploy/lockdown.sh --check          # see what's blocked and what got through
 ```
 
 If `.local` names don't resolve on your network, use the Pi's IP address
 (shown in the touchscreen's sidebar).
 
-`sudo bash deploy/lockdown.sh --strict` also installs an outbound firewall. Only
-the Scryfall sync and OS updates can reach the internet. The local network,
-SSH, VNC and Samba keep working.
+**No vendor contact, no automatic updates.** The stock software contacts the vendor on its own in several ways:
+- the sorter software checks for, downloads and installs updates at every boot
+- the touchscreen app does the same silently whenever it starts
+- crash logs are uploaded automatically
+- errors are reported to Sentry
+
+`lockdown.sh` stops all of it in two independent layers:
+1. **Host blocks:** every vendor and telemetry name in `/etc/hosts` points nowhere.
+2. **Outbound firewall:** only the local network (SSH, VNC, Samba, your PC) and localsorter's nightly Scryfall sync may leave the Pi. Any address not on that list is dropped and logged, including future or unknown vendor addresses.
+
+It also switches off Raspberry Pi OS's daily update checks. The image doesn't install OS updates by itself anyway.
+`--allow-os-updates` lets `apt` through when *you* run it, and `--no-firewall` keeps only the host blocks.
+Crash logs now go to `\\magic-sorter-INSER\Public\scans\logs` instead.
+
+During first-boot setup, before the lockdown is in place, the vendor software may send one anonymous version check. With the placeholder config it can't download anything. For zero contact from the very first boot, block `magic-sorter.com` on your home router too, if it supports domain blocking.
 
 `sudo bash deploy/lockdown.sh --undo` puts everything back to the vendor setup.
 
@@ -98,8 +112,8 @@ Images on a black background blend best. The included artwork is SEGA's, so keep
 
 ## Your scans
 
-Open `\\magic-sorter-xxxxx\Public\scans` from your PC (user `pi`, password
-`magicsorter`, the vendor default; consider changing it with `sudo smbpasswd pi`):
+Open `\\magic-sorter-INSER\Public\scans` from your PC (user `pi`, password
+`magicsorter` unless you changed it with `sudo smbpasswd pi`):
 
 | Path | Contents |
 |---|---|

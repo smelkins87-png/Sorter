@@ -143,6 +143,18 @@ class Exporter:
 
                 writer.writerow(row)
 
+    def store_logs(self, data):
+        """Keeps a log archive the sorter tried to upload to the vendor (it
+        does so by itself after a crash)."""
+        log_dir = os.path.join(self.export_dir, "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, "sorter-logs_%s.zip" % datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+        with open(path, "wb") as handle:
+            handle.write(data)
+
+        return path
+
     def store_session(self, name, data):
         """Keeps a copy of an end-of-run results file sent by the sorter."""
         session_dir = os.path.join(self.export_dir, "sessions")

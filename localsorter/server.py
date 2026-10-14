@@ -9,6 +9,8 @@ and response shapes mirror what the vendor code reads:
     GET  /sets/<game>         set list           (connector.setlist, touch UI, CP)
     GET  /popular/<format>    popular cards      (lib/matcher/rules/custom.py)
     POST /mail                end-of-run results (lib/organizer/results.py)
+    POST /sendlog             log upload, also sent by itself after a crash
+                              (lib/commands/sendlog.py): kept on the share
     GET|POST /device/config   config backup/restore
     POST /user/preferences    user preferences
     GET  /status              local health info (not used by the sorter)
@@ -441,6 +443,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "expected must be an object"})
 
                 return self._send(*self.app.verify(files["image"], expected))
+
+            if parts == ["sendlog"]:
+                files = parse_multipart(self.headers.get("Content-Type", ""), body)
+
+                if not files.get("log"):
+                    return self._send(400, {"error": "Missing log"})
+
+                path = self.app.exporter.store_logs(files["log"])
+                log.info("Sorter logs saved to %s", path)
+                return self._send(200, {"result": "ok"})
 
             if parts == ["mail"]:
                 files = parse_multipart(self.headers.get("Content-Type", ""), body)

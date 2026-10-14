@@ -34,7 +34,7 @@ def cmd_prices(settings, args):
 
     info, cards = scryfall.iter_bulk_cards("default_cards")
     log.info("Streaming %s (%s, %.0f MB)", info.get("name"), info.get("updated_at"),
-             (info.get("size") or 0) / 1e6)
+             (info.get("compressed_size") or info.get("size") or 0) / 1e6)
 
     started = time.monotonic()
     total = carddb.import_cards(conn, cards, progress=lambda n: log.info("  %d cards", n) if n % 20000 == 0 else None)

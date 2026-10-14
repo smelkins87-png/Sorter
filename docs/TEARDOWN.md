@@ -44,7 +44,8 @@ makes a drop-in local server possible without patching vendor code.
 | `<endpoint>/device/config` | Python, touch UI, CP | **Whole device config** (backup) / restore | on config save; restore button |
 | `<endpoint>/user/preferences` | Python | price source preference | on config save |
 | `o509538.ingest.sentry.io` | Python (`magicsorter.py`) | Warnings/errors **and log lines at INFO level as breadcrumbs**, tagged with device id; `send_default_pii=True` | continuously |
-| `www.magic-sorter.com/index.php?option=com_ars...` | touch UI, CP, Python | download id | update checks |
+| `www.magic-sorter.com/index.php?option=com_ars...` | touch UI, CP, Python | download id | update checks: Python **at every boot** (executor queues `update`), touch UI **silently at start and when online** (non-interactive) |
+| `<endpoint>/sendlog` | Python | **Log files** (zip) | on request, and **automatically after a fatal error** |
 | update download (`link&dlid=...`) | touch UI | — | **downloads and installs code with TLS verification disabled** (`NODE_TLS_REJECT_UNAUTHORIZED=0`) |
 | update download | CP | — | installs the `.deb` with `sudo dpkg -i` |
 | `api.ipify.org`, `ifconfig.me`, `icanhazip.com` | Python `lib/utils/webserver.py` | — | public IP lookup |

@@ -386,3 +386,18 @@ def test_parse_multipart_extracts_named_parts_bytes_exactly():
 def test_parse_multipart_non_multipart_content_type_returns_empty():
     assert parse_multipart("application/json", b'{"a": 1}') == {}
     assert parse_multipart("", b"") == {}
+
+
+def test_sendlog_keeps_logs_locally(env):
+    """The sorter uploads its logs by itself after a crash: they must land on
+    the share, not anywhere else."""
+    import urllib.request as _request
+
+    body = (b"--B\r\nContent-Disposition: form-data; name=\"log\"; filename=\"magicsorter.zip\"\r\n\r\n"
+            b"PK-fake-zip\r\n--B--\r\n")
+    request = _request.Request("http://127.0.0.1:%d/sendlog" % env.port, data=body,
+                               headers={"Content-Type": "multipart/form-data; boundary=B"})
+    assert json.load(_request.urlopen(request)) == {"result": "ok"}
+
+    saved = list((env.tmp_path / "scans" / "logs").glob("sorter-logs_*.zip"))
+    assert len(saved) == 1 and saved[0].read_bytes() == b"PK-fake-zip"
