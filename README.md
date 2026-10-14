@@ -149,6 +149,17 @@ The matching thresholds (`max_distance`, `min_margin`, `set_margin`) are
 starting values from synthetic tests. `eval` prints the distances for correct
 and wrong matches on your real scans, so you can set them properly.
 
+### Accuracy on real cards (simulated photos)
+
+`tools/realtest.py` turns real Scryfall card scans into simulated sorter photos and runs the full pipeline. Results from October 2026:
+- **Test set:** 273 cards (200 random, 40 heavily reprinted, 33 old-border), plus 30 cards hidden from the index.
+- **Right card:** 270; 3 not found, 0 wrong.
+- **Hidden cards:** all 30 rejected.
+- **Printing:** 222 confident and right, 48 flagged "set not detected" for a manual check, **0 confidently wrong**.
+- **Text reading on 2015+ cards:** set code read 93% of the time, collector number 81%.
+
+The photos come from the same scans as the references, so a real camera will do somewhat worse. Run `eval` on your own scans for the real numbers.
+
 ## Running it on a PC instead
 
 The same server runs on any machine with Python 3.9+, numpy, Pillow and

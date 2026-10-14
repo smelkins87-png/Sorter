@@ -14,7 +14,7 @@
   "region_image_size": "normal",
   "ocr": "auto",
   "tesseract_cmd": "tesseract",
-  "region_margin": 6.0,
+  "region_margin": 8.0,
   "border_check": true,
   "verify_mismatch_action": "manual_bin",
   "price_currency": "usd",

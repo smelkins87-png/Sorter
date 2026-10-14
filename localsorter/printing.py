@@ -36,7 +36,12 @@ log = logging.getLogger("localsorter")
 REGION_CARD_W = 488
 # Right end of the type line, where the set symbol sits on every frame since
 # 1997 (fractions of the card)
-SYMBOL_BOX = (0.80, 0.535, 0.965, 0.635)
+# Also covers the bottom-right corner of the art, where promo printings
+# (prerelease date, promo-pack "P") carry their stamp: those share the
+# collector line with the regular printing
+SYMBOL_BOX = (0.70, 0.47, 0.965, 0.635)
+# Bump when the close-up boxes change: stored close-ups are then rebuilt
+REGIONS_VERSION = "2"
 BOTTOM_BOX = ocr.BOTTOM_BOX
 # The scan's window is a bit larger than the reference, to absorb small
 # errors in the card outline
@@ -296,7 +301,7 @@ class Decision:
 
 
 class PrintingResolver:
-    def __init__(self, conn, db_lock, tesseract=None, ocr_mode="auto", region_margin=6.0, border_check=True):
+    def __init__(self, conn, db_lock, tesseract=None, ocr_mode="auto", region_margin=8.0, border_check=True):
         self.conn = conn
         self.db_lock = db_lock
         self.tesseract = tesseract
@@ -456,8 +461,10 @@ class PrintingResolver:
             if len(leaders) == 1:
                 ocr_pick = leaders[0]
 
-                # Set code + number agree, or a clear lead over the rest
-                if top >= 6 or top - runner_up >= 3:
+                # Set code and number both agree. A single token (a number
+                # alone) can come out of garbled text: that only counts
+                # when the close-ups agree (below)
+                if top >= 6:
                     decision.card_id = ocr_pick
                     decision.method = "ocr"
                     return

@@ -52,7 +52,9 @@ class Settings:
     tesseract_cmd: str = "tesseract"
     # How much closer (mean Lab colour distance over the pixels where the
     # printings differ) the winning printing's close-ups must be
-    region_margin: float = 6.0
+    # Calibrated on real cards (October 2026): every wrong pick had a lead
+    # under 20%; this also requires an absolute lead
+    region_margin: float = 8.0
     # Use the border colour (black/white/silver/gold/borderless) to tell
     # printings apart, e.g. Beta (black) from Unlimited (white)
     border_check: bool = True

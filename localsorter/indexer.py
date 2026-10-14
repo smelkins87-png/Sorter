@@ -14,7 +14,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-from . import imagehash, printing, scryfall
+from . import carddb, imagehash, printing, scryfall
 
 log = logging.getLogger("localsorter")
 
@@ -132,6 +132,12 @@ def build(conn, size="small", workers=4, delay=0.1, include_digital=False, limit
 def build_regions(conn, size="normal", workers=4, delay=0.1, include_digital=False, limit=None,
                   fetch=scryfall.download_bytes, progress=None):
     """Set symbol + collector info close-ups for look-alike printings."""
+    # Close-ups cut with other boxes can't be compared: start over
+    if carddb.get_meta(conn, "regions_version") != printing.REGIONS_VERSION:
+        with conn:
+            conn.execute("DELETE FROM regions")
+        carddb.set_meta(conn, "regions_version", printing.REGIONS_VERSION)
+
     todo = list(pending_regions(conn, size, include_digital))[:limit or None]
     log.info("%d look-alike printings to cut close-ups from", len(todo))
 

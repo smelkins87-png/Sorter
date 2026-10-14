@@ -167,14 +167,20 @@ def parse(text):
 
 def _number_forms(number):
     """Ways a collector number can be printed: 7 -> 7, 07, 007, 0007.
-    "The List" reprints (Scryfall "CMA-100") print the original "100"."""
+    "The List" reprints (Scryfall "CMA-100") print the original "100".
+    Promo variants (216p, 109s, 265†e) print the plain number: the stamp on
+    the art is their only difference, which OCR can't see."""
     number = (number or "").upper().rsplit("-", 1)[-1]
     number = re.sub(r"[^0-9A-Z]", "", number) or number
+    plain = re.sub(r"(?<=\d)[A-Z]+$", "", number)
     digits = number.lstrip("0") or number
     forms = {canon(number), canon(digits)}
 
     if digits.isdigit():
         forms.update(canon(digits.zfill(width)) for width in (3, 4))
+
+    if plain != number:
+        forms |= _number_forms(plain)
 
     return forms
 
