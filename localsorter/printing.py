@@ -174,23 +174,135 @@ def compare_regions(scan, references):
     return result
 
 
+# Thin strips just inside the card edge, away from the rounded corners. The
+# bottom edge is left out: on modern frames it carries the collector text
+BORDER_STRIPS = {
+    "top": (0.20, 0.008, 0.80, 0.024),
+    "left": (0.008, 0.15, 0.030, 0.85),
+    "right": (0.970, 0.15, 0.992, 0.85),
+}
+# The same, just outside the detected outline
+OUTSIDE_STRIPS = {
+    "top": (0.20, -0.035, 0.80, -0.012),
+    "left": (-0.045, 0.15, -0.015, 0.85),
+    "right": (1.015, 0.15, 1.045, 0.85),
+}
+# Detected border colours that may rule printings out. Silver, gold and
+# borderless are reported only: they are rare, and a wrong reading would
+# pick e.g. a gold-bordered World Championship deck card with confidence
+DECISIVE_BORDERS = {"black": {"black"}, "white": {"white"}}
+
+
+def _strip_stats(image, box):
+    h, w = image.shape[:2]
+    strip = image[int(box[1] * h):max(int(box[3] * h), int(box[1] * h) + 1),
+                  int(box[0] * w):max(int(box[2] * w), int(box[0] * w) + 1)]
+    lab = _lab(strip).reshape(-1, 3)
+
+    return np.median(lab, axis=0), float(np.std(lab[:, 0]))
+
+
+def _background(located):
+    """Median colour of the photo's outer margin: the sorter's background."""
+    preview = located.preview
+    h, w = preview.shape[:2]
+    m = max(2, int(0.03 * min(h, w)))
+    margin = np.concatenate([preview[:m].reshape(-1, 3), preview[-m:].reshape(-1, 3),
+                             preview[:, :m].reshape(-1, 3), preview[:, -m:].reshape(-1, 3)])
+
+    return np.median(_lab(margin[None, ...]).reshape(-1, 3), axis=0)
+
+
+def _border_class(lightness, chroma, b):
+    """black / white / gold / silver from a median Lab colour (OpenCV scale)."""
+    if lightness < 90:
+        return "black"
+    if b > 15:
+        return "gold"
+    if chroma < 15:
+        return "white" if lightness >= 175 else "silver"
+    return None
+
+
+def detect_border(located):
+    """Colour of the card's border: black, white, silver, gold, borderless,
+    or None when unsure (or when the card outline wasn't found).
+
+    Measured in Lab on the reduced-size photo, so it costs a few ms.
+    Returns (label, measurements)."""
+    if located is None or located.corners is None or located.preview is None or cv2 is None:
+        return None, {}
+
+    card = np.asarray(located.card)
+    inside = [_strip_stats(card, box) for box in BORDER_STRIPS.values()]
+    lab = np.median([m for m, _ in inside], axis=0)
+    lightness, a, b = float(lab[0]), float(lab[1]) - 128, float(lab[2]) - 128
+    chroma = float(np.hypot(a, b))
+    busy = sum(1 for _, std in inside if std > 30)
+    spread = max(m[0] for m, _ in inside) - min(m[0] for m, _ in inside)
+
+    # Is the outline really the card's edge? Just outside it we should see
+    # the background. A uniform band of another colour there means the outline
+    # was found *inside* the border (e.g. the frame of a white-bordered card on
+    # a light background), and what we measured above is not the border
+    background = _background(located)
+    outside = [_strip_stats(np.asarray(located.preview_region(box, CARD_W_PREVIEW)), (0, 0, 1, 1))
+               for box in OUTSIDE_STRIPS.values()]
+    band = np.median([m for m, _ in outside], axis=0)
+    band_uniform = all(std < 12 for _, std in outside)
+    band_vs_background = float(np.linalg.norm(band - background))
+
+    info = {"L": round(lightness), "chroma": round(chroma), "b": round(b), "spread": round(spread),
+            "outside_vs_background": round(band_vs_background)}
+
+    if band_uniform and band_vs_background > 25:
+        info["note"] = "outline may be inside the border"
+        return None, info
+
+    outside_class = _border_class(float(band[0]), float(np.hypot(band[1] - 128, band[2] - 128)),
+                                  float(band[2]) - 128)
+
+    if busy >= 2:
+        label = "borderless"               # art runs to the edge
+    elif busy or spread > 60:
+        return None, info                  # edges disagree: outline probably off
+    else:
+        label = _border_class(lightness, chroma, b)
+
+    # A black or white surround right outside the outline could be the real
+    # border, with the outline found on the frame inside it (a white border is
+    # invisible on a white background, a black one on black). If it disagrees
+    # with what's inside, we can't tell which is the border: say so
+    if outside_class in ("black", "white") and outside_class != label:
+        info["note"] = "%s just outside the outline: could be the real border" % outside_class
+        return None, info
+
+    return label, info
+
+
+# Card space for the outside strips (coarse colour only)
+CARD_W_PREVIEW = 120
+
+
 @dataclass
 class Decision:
     card_id: str
     set_detected: bool
     foil: int = None          # None: unknown
     lang: str = None          # None: not read
+    border: str = None        # detected border colour, None: unsure
     method: str = "hash"
     evidence: dict = field(default_factory=dict)
 
 
 class PrintingResolver:
-    def __init__(self, conn, db_lock, tesseract=None, ocr_mode="auto", region_margin=6.0):
+    def __init__(self, conn, db_lock, tesseract=None, ocr_mode="auto", region_margin=6.0, border_check=True):
         self.conn = conn
         self.db_lock = db_lock
         self.tesseract = tesseract
         self.ocr_mode = ocr_mode
         self.region_margin = region_margin
+        self.border_check = border_check
 
     def _rows(self, ids):
         ids = list(ids)
@@ -266,8 +378,22 @@ class PrintingResolver:
                 pool |= extra
                 distinct = {(rows[c]["set_code"], rows[c]["collector_number"]) for c in pool}
 
-        if len(distinct) > 1 or substitute:
+        # Border colour: Beta (black) vs Unlimited (white) share art and have
+        # no set symbol; the border is the only visible difference
+        decision.border, measured = detect_border(match.located)
+        if measured:
+            evidence["border"] = dict(measured, detected=decision.border)
+
+        pool, distinct, by_border = self._filter_by_border(decision, pool, rows, distinct)
+
+        if len(distinct) > 1 or substitute or by_border:
             self._choose(decision, match, pool, rows, text)
+
+            if by_border and decision.method == "hash":
+                decision.method = "border"
+                decision.set_detected = len(distinct) == 1
+
+            self._check_text_agrees(decision, rows, text, excluded=by_border)
 
         chosen = rows[decision.card_id]
         parsed = ocr.parse(text) if text else {}
@@ -275,6 +401,38 @@ class PrintingResolver:
         decision.foil = self._foil(chosen, foil_mode, parsed)
 
         return decision
+
+    def _filter_by_border(self, decision, pool, rows, distinct):
+        """Drops look-alike printings whose border colour doesn't match the
+        scan. Returns (pool, distinct, excluded ids)."""
+        compatible = DECISIVE_BORDERS.get(decision.border)
+
+        if not self.border_check or not compatible:
+            return pool, distinct, set()
+
+        colours = {rows[c]["border_color"] for c in pool}
+        keep = {c for c in pool if rows[c]["border_color"] in compatible}
+
+        # Only useful when the printings differ, and never empty the pool
+        if not keep or keep == pool or len(colours) < 2:
+            return pool, distinct, set()
+
+        decision.evidence["border_kept"] = sorted(rows[c]["set_code"] for c in keep)
+        distinct = {(rows[c]["set_code"], rows[c]["collector_number"]) for c in keep}
+
+        return keep, distinct, pool - keep
+
+    def _check_text_agrees(self, decision, rows, text, excluded):
+        """If the collector text clearly names a printing the border check
+        ruled out, the two disagree: keep the answer but not as certain."""
+        if not excluded or not text:
+            return
+
+        scores = ocr.score_candidates(text, [rows[c] for c in excluded])
+
+        if any(score >= 6 for score, _ in scores.values()):
+            decision.evidence["conflict"] = "border vs collector text"
+            decision.set_detected = False
 
     def _choose(self, decision, match, pool, rows, text):
         evidence = decision.evidence
@@ -333,7 +491,7 @@ class PrintingResolver:
                 decision.set_detected = complete and clear
             return
 
-        # 3. Nothing to go on: keep the best guess, but say the set is a guess
+        # 3. Nothing else to go on: keep the best guess, but say the set is a guess
         decision.card_id = ocr_pick or (match.card_id if match.card_id in candidates else candidates[0])
         decision.set_detected = False
 

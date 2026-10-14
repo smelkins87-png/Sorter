@@ -53,6 +53,9 @@ class Settings:
     # How much closer (mean Lab colour distance over the pixels where the
     # printings differ) the winning printing's close-ups must be
     region_margin: float = 6.0
+    # Use the border colour (black/white/silver/gold/borderless) to tell
+    # printings apart, e.g. Beta (black) from Unlimited (white)
+    border_check: bool = True
 
     # Price returned to the sorter: "usd" (TCGplayer market via Scryfall) or "eur"
     price_currency: str = "usd"

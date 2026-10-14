@@ -152,12 +152,24 @@ class Located:
     card: Image.Image
     corners: np.ndarray = None
     _full: np.ndarray = None
+    # The reduced-size decode the outline was found in, and its scale
+    # relative to full resolution: cheap for coarse looks around the card
+    preview: np.ndarray = None
+    preview_scale: np.ndarray = None
 
     def rotated(self):
         """Same card turned 180 degrees."""
         corners = None if self.corners is None else np.roll(self.corners, 2, axis=0)
 
-        return Located(self.data, self.card.rotate(180), corners, self._full)
+        return Located(self.data, self.card.rotate(180), corners, self._full, self.preview, self.preview_scale)
+
+    def preview_region(self, box, card_width):
+        """Like region(), from the reduced image (fast, coarse). Boxes may
+        reach outside the card (negative or > 1) to look at its surroundings."""
+        if self.corners is None or self.preview is None or cv2 is None:
+            return None
+
+        return _warp(self.preview, self.corners / self.preview_scale, box, card_width)
 
     def full_image(self):
         if self._full is None:
@@ -182,10 +194,11 @@ def locate(data):
     if corners is None:
         return Located(data, _center_crop(image))
 
-    card = _warp(np.asarray(image), corners, (0, 0, 1, 1), CARD_W)
+    preview = np.asarray(image)
+    card = _warp(preview, corners, (0, 0, 1, 1), CARD_W)
     scale = np.array([full_size[0] / image.width, full_size[1] / image.height], dtype=np.float32)
 
-    return Located(data, card, corners * scale)
+    return Located(data, card, corners * scale, preview=preview, preview_scale=scale)
 
 
 def card_height(card_width):

@@ -73,7 +73,7 @@ class App:
         self.db_lock = threading.Lock()
         tesseract = Tesseract(settings.tesseract_cmd) if settings.ocr != "off" else None
         self.resolver = resolver if resolver is not None else PrintingResolver(
-            self.conn, self.db_lock, tesseract, settings.ocr, settings.region_margin)
+            self.conn, self.db_lock, tesseract, settings.ocr, settings.region_margin, settings.border_check)
         self._data_version = carddb.get_meta(self.conn, "data_version")
         self._last_check = time.monotonic()
 
@@ -136,9 +136,10 @@ class App:
                 foil = decision.foil if decision.foil is not None else foil
                 match.printing = dict(decision.evidence, method=decision.method)
                 detected_lang = decision.lang
+                detected_border = decision.border
             except Exception:
                 log.exception("Printing check failed; keeping the hash match")
-                detected_lang = None
+                detected_lang = detected_border = None
 
             match.card_id, match.set_detected = card_id, set_detected
             row = self.card_row(card_id)
@@ -149,6 +150,9 @@ class App:
                 # What the card itself says beats the sorter's language setting
                 if detected_lang:
                     card["lang"] = detected_lang
+                # Border as seen on the scan (None: unsure); the printing's own
+                # border colour is in "extra"
+                card["border"] = detected_border
                 card["uuid"] = card_uuid
                 card["detect_set"] = 1 if set_detected else 0
                 card["confidence"] = match.confidence()

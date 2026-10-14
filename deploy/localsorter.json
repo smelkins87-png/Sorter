@@ -15,6 +15,7 @@
   "ocr": "auto",
   "tesseract_cmd": "tesseract",
   "region_margin": 6.0,
+  "border_check": true,
   "price_currency": "usd",
   "include_digital": false
 }

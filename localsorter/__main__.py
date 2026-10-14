@@ -113,7 +113,8 @@ class Pipeline:
         self.lock = threading.Lock()
         self.index = HashIndex.from_db(self.conn, settings.include_digital)
         tesseract = Tesseract(settings.tesseract_cmd) if settings.ocr != "off" else None
-        self.resolver = PrintingResolver(self.conn, self.lock, tesseract, settings.ocr, settings.region_margin)
+        self.resolver = PrintingResolver(self.conn, self.lock, tesseract, settings.ocr, settings.region_margin,
+                                         settings.border_check)
 
     def identify_file(self, path, foil_mode=0, lang="en"):
         with open(path, "rb") as handle:
@@ -149,6 +150,8 @@ def cmd_identify(settings, args):
                                            "" if decision.foil is None else " foil=%d" % decision.foil)
             if decision.lang:
                 extra += " lang=" + decision.lang
+            if decision.border:
+                extra += " border=" + decision.border
 
         print("%s: %s %s  distance=%s margin=%s%s  %.0f ms"
               % (path, verdict, label, match.distance, match.margin, extra, elapsed))

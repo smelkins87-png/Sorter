@@ -34,6 +34,7 @@ camera ─► vendor sorter app ──POST /image/mtg──► localsorter (127.
     - Foil detection on 2015+ frames: foils print ★ instead of •. Use the sorter's "detect foil" setting.
     - The card's language is read from the same line.
     - Printings that only exist in foil (or only non-foil) are marked automatically.
+    - **Border color** (black / white, plus silver, gold and borderless as information): tells Beta (black) from Unlimited/Revised (white), which share art and have no set symbol. When a border blends into the sorter's background, it's reported as unsure rather than guessed. Black vs white works best on a mid-tone background.
 - **Prices:** Scryfall's daily bulk file includes TCGplayer market prices (USD; Cardmarket EUR optional). It is refreshed nightly at about 04:30.
 
 ## Install: fresh SD card from a Windows PC

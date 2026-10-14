@@ -16,15 +16,18 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 RARITY_COLOURS = {"common": (25, 25, 25), "uncommon": (165, 180, 195), "rare": (205, 165, 60),
                   "mythic": (225, 95, 30)}
 RARITY_LETTER = {"common": "C", "uncommon": "U", "rare": "R", "mythic": "M"}
+BORDER_COLOURS = {"black": (15, 15, 15), "white": (236, 234, 228), "silver": (150, 152, 156),
+                  "gold": (196, 160, 70)}
 
 
-def make_card(seed, art_seed=None):
+def make_card(seed, art_seed=None, border="black", frame_colour=None):
     """A card image. Cards sharing art_seed share the illustration (reprints)."""
     rng = random.Random(seed)
     art_rng = random.Random(art_seed if art_seed is not None else seed)
 
     frame = tuple(rng.randint(60, 230) for _ in range(3))
-    img = Image.new("RGB", (W, H), (15, 15, 15))
+    frame = frame_colour or frame
+    img = Image.new("RGB", (W, H), BORDER_COLOURS[border])
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((18, 18, W - 18, H - 18), radius=18, fill=frame)
 
@@ -67,15 +70,20 @@ def make_card(seed, art_seed=None):
 
 
 def make_printing(seed, set_code, number, rarity="common", symbol_seed=None, total=None, lang="EN",
-                  foil=False, frame="2015", art_seed=None, scale=3, artist="Jane Doe"):
+                  foil=False, frame="2015", art_seed=None, scale=3, artist="Jane Doe", border="black",
+                  frame_colour=None):
     """A specific printing: same card + art as make_card(seed, art_seed), plus
     a set symbol and the collector info of its frame, drawn sharply at
     `scale` x the reference size (real sorter photos are ~3x Scryfall's
     "normal" image)."""
-    base = make_card(seed, art_seed if art_seed is not None else seed)
+    base = make_card(seed, art_seed if art_seed is not None else seed, border, frame_colour)
     img = base.resize((W * scale, H * scale), Image.BICUBIC)
     d = ImageDraw.Draw(img)
     s = scale
+
+    # 1993 frame (Alpha to Revised): no set symbol, no collector info
+    if frame == "1993":
+        return img
 
     # Set symbol at the right end of the type line, in rarity colour
     rng = random.Random(symbol_seed if symbol_seed is not None else set_code)
@@ -130,12 +138,13 @@ def reference_bytes(card):
 
 
 def photo(card, seed=0, angle=None, upside_down=False, landscape=False, brightness=None,
-          card_width=None, canvas_size=(1300, 1000), blur=0.8):
+          card_width=None, canvas_size=(1300, 1000), blur=0.8, background=None):
     """Simulates the sorter's cropped camera frame of a card. The defaults
     give a small, quick image; card_width=1200 with canvas_size=(2150, 1850)
     matches the real camera crop."""
     rng = random.Random(seed)
-    canvas = Image.new("RGB", canvas_size, (rng.randint(150, 200),) * 3)
+    grey = rng.randint(150, 200)
+    canvas = Image.new("RGB", canvas_size, background or (grey,) * 3)
     noise = Image.effect_noise(canvas_size, 12).convert("RGB")
     canvas = Image.blend(canvas, noise, 0.15)
 

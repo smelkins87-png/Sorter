@@ -319,6 +319,7 @@ def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
         "type": main_type(row["type_line"]),
         "cmc": int(cmc) if cmc is not None else None,
         "type_line": row["type_line"],
+        "border_color": row["border_color"],
     }
 
     return {
