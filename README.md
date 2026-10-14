@@ -110,6 +110,17 @@ Images on a black background blend best. The included artwork is SEGA's, so keep
 **Updating localsorter later:** copy the new version into the "Public" share (or onto bootfs), then
 `cd` there and run `sudo bash deploy/install.sh` again. Settings, card data and scans are kept.
 
+**What the first sync downloads** (measured with real Scryfall data, October 2026):
+
+| Step | Amount | Stored on the Pi |
+|---|---|---|
+| Card data and prices | ~80 MB compressed, ~119k printings; under a minute on a PC | ~180 MB database |
+| Fingerprints | ~113k small images, ~1.3 GB; about an hour on a PC | ~5 MB |
+| Printing close-ups | ~79k normal-size images (72% of printings share their art), ~6 GB | ~400 MB |
+
+On the Pi expect several hours in total. It's resumable, so an interruption only loses the current image.
+After that, the nightly sync only fetches prices plus whatever new cards and changed images appeared.
+
 ## Your scans
 
 Open `\\magic-sorter-INSER\Public\scans` from your PC (user `pi`, password

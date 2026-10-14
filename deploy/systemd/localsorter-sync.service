@@ -12,7 +12,8 @@ Environment=PYTHONPATH=/opt/localsorter
 ExecStart=/usr/bin/python3 -m localsorter --config /etc/localsorter.json sync
 Nice=10
 IOSchedulingClass=idle
-TimeoutStartSec=6h
+# The first sync downloads ~200k images; later runs take minutes
+TimeoutStartSec=24h
 MemoryMax=400M
 
 # Hardening
