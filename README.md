@@ -79,6 +79,10 @@ SSH, VNC and Samba keep working.
 
 `sudo bash deploy/lockdown.sh --undo` puts everything back to the vendor setup.
 
+**Optional dark theme for the touchscreen:** `sudo bash deploy/theme.sh` (undo with `--undo`).
+To change the background, replace `/home/pi/magic-sorter-touch/assets/background.jpg`.
+Images on a black background blend best. The included artwork is SEGA's, so keep it to your own sorter and this repo private.
+
 **Updating localsorter later:** copy the new version into the "Public" share (or onto bootfs), then
 `cd` there and run `sudo bash deploy/install.sh` again. Settings, card data and scans are kept.
 

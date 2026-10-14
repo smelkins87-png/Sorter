@@ -1,0 +1,157 @@
+/*
+ * Dark theme for the Magic Sorter touchscreen (Bootstrap 4, Electron 2 /
+ * Chromium 61: no `inset`, prefixed masks). Loaded after the vendor's
+ * overrides.css by deploy/theme.sh.
+ */
+:root {
+    --ls-bg: #0b0b0e;
+    --ls-surface: rgba(16, 16, 21, 0.70);
+    --ls-surface-solid: #16161c;
+    --ls-raised: #23232b;
+    --ls-border: #34343e;
+    --ls-text: #ececf1;
+    --ls-muted: #a3a3b0;
+    --ls-accent: #d6332c;        /* the red stripes */
+    --ls-accent-hover: #ee4a42;
+    --ls-gold: #e0b04a;          /* the rings */
+}
+
+html, body {
+    background-color: var(--ls-bg);
+    color: var(--ls-text);
+}
+
+/* Background art: right side, faded towards the text, black made transparent */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 62%;
+    background: url("background.jpg") right bottom / contain no-repeat;
+    opacity: 0.38;
+    mix-blend-mode: screen;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 55%);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body > .container-fluid,
+body > .modal {
+    position: relative;
+    z-index: 1;
+}
+
+a, .btn-link { color: var(--ls-gold); }
+a:hover { color: #f3c868; }
+hr { border-top-color: var(--ls-border); }
+.text-muted, small, .small { color: var(--ls-muted) !important; }
+label, .col-form-label, h1, h2, h3, h4, h5, h6, p { color: var(--ls-text); }
+a[data-toggle="popover"] { color: var(--ls-text); border-bottom-color: var(--ls-muted); }
+
+/* Sidebar */
+.bg-light, .sidebar {
+    background-color: var(--ls-surface-solid) !important;
+    border-right: 1px solid var(--ls-border);
+}
+.nav-pills .nav-link { color: var(--ls-text); border-radius: 4px; }
+.nav-pills .nav-link:hover { background-color: var(--ls-raised); }
+.nav-pills .nav-link.active, .nav-pills .show > .nav-link {
+    background-color: var(--ls-accent);
+    color: #fff;
+}
+
+/* Text sits on a panel so the art never competes with it */
+main.content > .section,
+main.content > section {
+    background-color: var(--ls-surface);
+    border-radius: 6px;
+    padding: 8px 4px;
+}
+footer { background-color: var(--ls-surface-solid); color: var(--ls-muted); }
+footer p { color: var(--ls-muted); }
+#current-action { color: var(--ls-text); }
+
+/* Forms */
+.form-control, .custom-select, select.form-control, .input-group-text {
+    background-color: var(--ls-raised);
+    border-color: var(--ls-border);
+    color: var(--ls-text);
+}
+.form-control:focus {
+    background-color: var(--ls-raised);
+    color: var(--ls-text);
+    border-color: var(--ls-accent);
+    box-shadow: 0 0 0 0.2rem rgba(214, 51, 44, 0.3);
+}
+.form-control::placeholder { color: var(--ls-muted); }
+.form-control:disabled, .form-control[readonly] { background-color: #1b1b21; color: var(--ls-muted); }
+option { background-color: var(--ls-raised); color: var(--ls-text); }
+
+/* Buttons. Yes/No toggles are .btn-light inside .btn-group-toggle */
+.btn-light, .btn-outline-secondary, .btn-outline-dark {
+    background-color: var(--ls-raised);
+    border-color: var(--ls-border);
+    color: var(--ls-text);
+}
+.btn-light:hover, .btn-outline-secondary:hover, .btn-outline-dark:hover {
+    background-color: #2f2f39;
+    border-color: #45454f;
+    color: #fff;
+}
+.btn-light.active, .btn-light:not(:disabled):not(.disabled).active,
+.btn-light:not(:disabled):not(.disabled):active,
+.btn-group-toggle .btn.active {
+    background-color: var(--ls-accent);
+    border-color: var(--ls-accent);
+    color: #fff;
+}
+.btn-primary {
+    background-color: var(--ls-accent);
+    border-color: var(--ls-accent);
+}
+.btn-primary:hover, .btn-primary:focus, .btn-primary:not(:disabled):not(.disabled):active {
+    background-color: var(--ls-accent-hover);
+    border-color: var(--ls-accent-hover);
+}
+.btn-secondary { background-color: #4a4a55; border-color: #4a4a55; }
+.btn-dark { background-color: #000; border-color: var(--ls-border); color: var(--ls-text); }
+.btn-warning { background-color: var(--ls-gold); border-color: var(--ls-gold); color: #1a1408; }
+
+/* Cards, modals, lists, alerts */
+.card, .modal-content, .list-group-item, .popover, .dropdown-menu {
+    background-color: var(--ls-surface-solid);
+    border-color: var(--ls-border);
+    color: var(--ls-text);
+}
+.card-header, .modal-header, .modal-footer { border-color: var(--ls-border); }
+.popover-body, .popover-header { color: var(--ls-text); background-color: var(--ls-surface-solid); }
+.close { color: var(--ls-text); text-shadow: none; opacity: 0.8; }
+.alert-warning { background-color: #3a2f12; border-color: #6b5419; color: #f3d98b; }
+.table { color: var(--ls-text); }
+.table td, .table th { border-color: var(--ls-border); }
+.badge-secondary { background-color: #4a4a55; }
+
+/* Log window */
+pre, code, #logging-window {
+    background-color: #08080a;
+    color: #d6d6de;
+}
+pre { border: 1px solid var(--ls-border); border-radius: 4px; padding: 6px; }
+
+/* jQuery UI slider, select2 and on-screen keyboard */
+.ui-widget-content { background: var(--ls-raised); border-color: var(--ls-border); color: var(--ls-text); }
+.ui-slider .ui-slider-handle { background: var(--ls-accent); border-color: var(--ls-accent); }
+.ui-slider-pips .ui-slider-label { color: var(--ls-muted); }
+.select2-container--default .select2-selection--single,
+.select2-container--default .select2-selection--multiple,
+.select2-dropdown {
+    background-color: var(--ls-raised);
+    border-color: var(--ls-border);
+    color: var(--ls-text);
+}
+.select2-container--default .select2-selection--single .select2-selection__rendered { color: var(--ls-text); }
+.select2-container--default .select2-results__option--highlighted[aria-selected] { background-color: var(--ls-accent); }
+.ui-keyboard { background: var(--ls-surface-solid); border-color: var(--ls-border); }
+.ui-keyboard-button { background: var(--ls-raised); color: var(--ls-text); border-color: var(--ls-border); }
