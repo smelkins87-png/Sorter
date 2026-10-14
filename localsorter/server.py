@@ -14,6 +14,8 @@ and response shapes mirror what the vendor code reads:
     GET|POST /device/config   config backup/restore
     POST /user/preferences    user preferences
     GET  /status              local health info (not used by the sorter)
+    POST /resort/start|stop   the plugin re-sorting the manual-check bin with
+                              the review page's verdicts (resort.py)
 """
 import csv
 import io
@@ -33,6 +35,7 @@ from .exporter import Exporter
 from .matcher import HashIndex
 from .ocr import Tesseract
 from .printing import PrintingResolver
+from .resort import ResortSession
 
 log = logging.getLogger("localsorter")
 
@@ -76,6 +79,7 @@ class App:
         tesseract = Tesseract(settings.tesseract_cmd) if settings.ocr != "off" else None
         self.resolver = resolver if resolver is not None else PrintingResolver(
             self.conn, self.db_lock, tesseract, settings.ocr, settings.region_margin, settings.border_check)
+        self.resort = None
         self._data_version = carddb.get_meta(self.conn, "data_version")
         self._last_check = time.monotonic()
 
@@ -125,6 +129,12 @@ class App:
 
         card_uuid = str(uuid.uuid4())
         s = self.settings
+
+        if self.resort is not None:
+            answer = self._resort_answer(image, card_uuid, condition, foil, lang)
+            if answer is not None:
+                return answer
+
         match = self.index.identify(image, s.max_distance, s.min_margin, s.set_margin, allowed or None)
         card = None
 
@@ -248,6 +258,57 @@ class App:
                 "%s (%s #%s)" % (card["title"], card["set"], card["num"]) if card else "nothing")
 
         return 200, payload
+
+    # --- re-sorting the manual-check bin ----------------------------------
+
+    def resort_start(self, uuids):
+        from .review import LABELS_SCHEMA
+
+        with self.db_lock, self.conn:
+            self.conn.executescript(LABELS_SCHEMA)
+
+        self.resort = ResortSession(self.settings.export_dir, self.conn, self.db_lock, uuids)
+        return 200, {"result": "ok", "cards": len(self.resort.queue)}
+
+    def resort_stop(self):
+        self.resort = None
+        log.info("Re-sort finished")
+        return 200, {"result": "ok"}
+
+    def _resort_answer(self, image, card_uuid, condition, foil, lang):
+        """The review page's verdict for a card pulled back out of the bin,
+        or None to identify it the usual way."""
+        from .imagehash import locate
+
+        kind, label = self.resort.match(locate(image))
+
+        if kind in ("unknown", "unreviewed"):
+            return None
+
+        row = self.card_row(label["card_id"]) if kind == "verdict" and label["card_id"] else None
+
+        if row is None:
+            # "Not a card", or identical copies with different verdicts:
+            # back to the manual check
+            reason = "ambiguous copies" if kind == "ambiguous" else "reviewed: not a card"
+            log.info("Re-sort: %s, back to the manual check", reason)
+            self.exporter.record(card_uuid, image, None, None, condition=condition, foil=foil)
+            return 404, {"error": "Card not found", "uuid": card_uuid}
+
+        card = carddb.to_api_card(row, foil=foil, condition=condition, lang=lang, currency=self.settings.price_currency)
+        card["uuid"] = card_uuid
+        card["detect_set"] = 1
+        card["confidence"] = {"printing": {"method": "review", "reviewed_scan": label["uuid"]}}
+
+        class Reviewed(object):
+            distance = margin = ""
+            set_detected = True
+            printing = {"method": "review"}
+
+        self.exporter.record(card_uuid, image, card, Reviewed(), condition=condition, foil=foil)
+        log.info("Re-sort: %s (%s #%s) from the review", card["title"], card["set"], card["num"])
+
+        return 200, {"result": card}
 
     def sets(self, params):
         orderby = params.get("orderby", ["released_at"])[0]
@@ -446,6 +507,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "expected must be an object"})
 
                 return self._send(*self.app.verify(files["image"], expected))
+
+            if parts == ["resort", "start"]:
+                data = json.loads(body or b"{}")
+                uuids = (data.get("uuids") if isinstance(data, dict) else None) or []
+                if not isinstance(uuids, list) or not all(isinstance(u, str) for u in uuids):
+                    return self._send(400, {"error": "uuids must be a list of scan ids"})
+                return self._send(*self.app.resort_start(uuids))
+
+            if parts == ["resort", "stop"]:
+                return self._send(*self.app.resort_stop())
 
             if parts == ["sendlog"]:
                 files = parse_multipart(self.headers.get("Content-Type", ""), body)

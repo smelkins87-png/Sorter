@@ -76,17 +76,23 @@ if [[ -d $PLUGINS ]]; then
     install -o pi -g pi -m 0644 plugin/localsorter/__init__.py plugin/localsorter/localsorter.py "$PLUGINS/localsorter/"
     rm -f "$PLUGINS/localsorter/disabled.txt"
 
-    first_install=0
-    [[ -d $PLUGINS/verifydrop ]] || first_install=1
-    mkdir -p "$PLUGINS/verifydrop"
-    install -o pi -g pi -m 0644 plugin/verifydrop/__init__.py plugin/verifydrop/verifydrop.py "$PLUGINS/verifydrop/"
-    # Off until switched on from the touchscreen (System settings > Available plugins)
-    if [[ $first_install -eq 1 ]]; then
-        sudo -u pi touch "$PLUGINS/verifydrop/disabled.txt"
-    fi
-    chown -R pi:pi "$PLUGINS/localsorter" "$PLUGINS/verifydrop"
+    # The on/off switches: off until switched on from the touchscreen
+    # (System settings > Available plugins)
+    for switch in verifydrop resortbin; do
+        first_install=0
+        [[ -d $PLUGINS/$switch ]] || first_install=1
+        mkdir -p "$PLUGINS/$switch"
+        install -o pi -g pi -m 0644 "plugin/$switch/__init__.py" "plugin/$switch/$switch.py" "$PLUGINS/$switch/"
+        if [[ $first_install -eq 1 ]]; then
+            sudo -u pi touch "$PLUGINS/$switch/disabled.txt"
+        fi
+        chown -R pi:pi "$PLUGINS/$switch"
+    done
+    chown -R pi:pi "$PLUGINS/localsorter"
     systemctl try-restart magicsorter_py.service || true
-    echo "Second photo after each drop: $( [[ -f $PLUGINS/verifydrop/disabled.txt ]] && echo switched off || echo switched on )"
+    for switch in verifydrop resortbin; do
+        echo "$switch: $( [[ -f $PLUGINS/$switch/disabled.txt ]] && echo switched off || echo switched on )"
+    done
 else
     echo "Sorter plugins folder not found; skipping"
 fi

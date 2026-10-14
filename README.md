@@ -140,6 +140,16 @@ Open **`http://magic-sorter-INSER.local:8766`** (or the Pi's IP address, port 87
 - **Download collection CSV:** the day's cards with your corrections applied.
 - **Tuning data:** every verdict is written to that day's `labels.csv`, which `python3 -m localsorter eval` reads directly.
 
+**Re-sorting the manual-check bin (resortbin):** switch it on in the touchscreen's
+**System settings → Available plugins**. When the feeders run out and the manual-check bin has cards:
+1. **The sorter pauses.** The Logging page says how many cards are waiting and links to this review page.
+2. **You review** them here, then press **Resume** on the touchscreen. Press **Stop** to finish without re-sorting.
+3. **The machine sorts them again.** It measures the bin like a feeder, pulls the cards back out from the top, and sorts each one with your verdict. Pile order says which reviewed scan each card is, and a photo comparison confirms it.
+4. **Cards still unresolved** go to the other bin for unrecognised cards, and the next pause offers another round.
+
+Two identical-looking copies reviewed as different printings can't be told apart from a photo if the pile was disturbed. They go back to the manual check rather than being guessed.
+It needs two bins for unrecognised cards: one is emptied while the other catches what still can't be sorted.
+
 The page works offline. It uses no web fonts or online card images, so reviewing tells nobody what's in your collection.
 To add a password, set `"review_password"` in `/etc/localsorter.json` (any user name works) and run `sudo systemctl restart localsorter`.
 To turn the page off, set `"review_port": 0`.

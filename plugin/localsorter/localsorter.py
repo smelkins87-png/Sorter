@@ -1,14 +1,18 @@
-"""localsorter: the second photo after each drop ("verifydrop").
+"""localsorter: the sorter-side half of localsorter. Two features, each
+switched on and off from the touchscreen:
 
-Photographs the destination pile after each drop and checks that the card on
-top is the one that should be there.
+verifydrop  photographs the destination pile after each drop and checks that
+            the card on top is the one that should be there
+resortbin   when the feeders run out, pauses so the manual-check bin can be
+            reviewed on the review page, then (on Resume) pulls those cards
+            back out of the bin and sorts them with the review's verdicts
 
 The vendor loads plugins once, at start, and skips any with a disabled.txt.
-So this plugin is always loaded, and the on/off switch is a separate,
-do-nothing "verifydrop" plugin: the touchscreen (System settings > Available
-plugins) toggles verifydrop/disabled.txt, which is checked here before every
-card. Switching on or off takes effect from the next card, no restart. Both
-are installed by deploy/install.sh, verifydrop switched off.
+So this plugin is always loaded, and the on/off switches are separate,
+do-nothing "verifydrop" and "resortbin" plugins: the touchscreen (System
+settings > Available plugins) toggles their disabled.txt, which is checked
+here before every card. Switching takes effect from the next card, no
+restart. All are installed by deploy/install.sh, the switches off.
 
 The camera sits on the head, offset from the suction nozzle. For the feeder
 photo the sorter moves the head by 55 mm + card_offset.x and at least 10 mm
@@ -30,12 +34,16 @@ waits for the move, the photo and the identification.
 import io
 import json
 import os
+import socket
+import time
 
 from lib.utils.pluginbase import PluginBase
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The on/off switch: the "verifydrop" plugin folder next to this one
 SWITCH_DIR = os.path.join(os.path.dirname(HERE), "verifydrop")
+RESORT_SWITCH_DIR = os.path.join(os.path.dirname(HERE), "resortbin")
+LOCALSORTER_CONFIG = "/etc/localsorter.json"
 
 # Same as Robot._move_for_picture
 CAMERA_OFFSET_X = 55
@@ -64,13 +72,20 @@ class Localsorter(PluginBase):
         self._camera = None
         self._game = "mtg"
         self._unreachable = set()
+        # While pulling cards back out of the manual-check bin:
+        # {"bin": position, "left": cards still to pull, "records": its cards}
+        self._resort = None
 
     @staticmethod
     def get_version():
-        return "1.2.0"
+        return "1.3.0"
 
     def _enabled(self):
-        return os.path.isdir(SWITCH_DIR) and not os.path.exists(os.path.join(SWITCH_DIR, "disabled.txt"))
+        return self._switched_on(SWITCH_DIR)
+
+    @staticmethod
+    def _switched_on(folder):
+        return os.path.isdir(folder) and not os.path.exists(os.path.join(folder, "disabled.txt"))
 
     def _endpoint(self):
         endpoint = self._sorter_config.get("endpoint", "")
@@ -89,6 +104,131 @@ class Localsorter(PluginBase):
         self._game = commandData.get("game", "mtg")
 
     def onRobotReleaseCard(self, robot, feeder, destination):
+        # Count the cards pulled back out of the manual-check bin
+        if self._resort is not None and feeder is self._resort["bin"]:
+            self._resort["left"] -= 1
+
+        self._verify_drop(robot, destination)
+
+    def onRobotGetNextFeeder(self, robot):
+        """Feeds the manual-check bin back in after a review (resortbin).
+        Returning None leaves the choice to the sorter."""
+        if self._resort is not None:
+            if self._resort["left"] > 0 and robot._running:
+                return self._resort["bin"]
+
+            self._finish_resort()
+            return None
+
+        if not self._switched_on(RESORT_SWITCH_DIR) or not self._endpoint():
+            return None
+
+        plate = robot._plate
+
+        # Only once every feeder is done (each ended on its stop token)
+        if plate.get_feeders(enabledOnly=True):
+            return None
+
+        bins = [p for p in plate.get_positions_flat() if self._is_manual_bin(p)]
+        waiting = [b for b in bins if any(card.get("uuid") for card in b.cards)]
+
+        if not waiting:
+            return None
+
+        target = max(waiting, key=lambda b: len(b.cards))
+
+        # Cards that still can't be sorted need somewhere else to go
+        if not any(b is not target and b.enabled for b in bins):
+            self._logger.warning("Re-sorting the manual-check bin needs a second bin for unrecognised cards")
+            return None
+
+        self._logger.warning("%d cards in the manual-check bin (position %s). Review them at %s, then press "
+                             "Resume to sort them, or Stop to finish." % (len(target.cards), target.index,
+                                                                         self._review_url()))
+        self._pause(robot)
+
+        # Wait for the touchscreen's Resume (or Stop) without moving
+        while robot._pause and robot._running:
+            time.sleep(0.2)
+
+        if not robot._running:
+            return None
+
+        return self._start_resort(robot, target)
+
+    # --- re-sorting the manual-check bin -----------------------------------
+
+    @staticmethod
+    def _is_manual_bin(position):
+        """Positions the sorting rules reserve for unrecognised cards."""
+        criteria = position.criteria
+
+        if not criteria or position.isFeeder:
+            return False
+
+        try:
+            return criteria["rule"] == "fixed" and criteria["value"] is True
+        except (KeyError, TypeError, IndexError):
+            return False
+
+    def _review_url(self):
+        port = 8766
+
+        try:
+            with open(LOCALSORTER_CONFIG) as handle:
+                port = int(json.load(handle).get("review_port", port))
+        except (OSError, ValueError):
+            pass
+
+        return "http://%s.local:%d" % (socket.gethostname(), port)
+
+    def _post(self, path, data):
+        import requests
+
+        return requests.post(self._endpoint() + path, json=data, timeout=60).json()
+
+    def _start_resort(self, robot, target):
+        # Top of the pile first: the last card dropped is the first pulled
+        uuids = [card["uuid"] for card in reversed(target.cards) if card.get("uuid")]
+
+        try:
+            self._post("/resort/start", {"uuids": uuids})
+        except Exception as error:
+            self._logger.warning("Could not start re-sorting (%s)" % error)
+            return None
+
+        # Measure the pile like a feeder; a feeder is never a destination, so
+        # nothing gets dropped back on the pile being emptied
+        robot._plate.probeFeedingPositions([target])
+        target.isFeeder = True
+
+        self._resort = {"bin": target, "left": len(target.cards), "records": list(target.cards)}
+        self._logger.info("Re-sorting %d cards from position %s" % (len(target.cards), target.index))
+
+        return target
+
+    def _finish_resort(self):
+        resort, self._resort = self._resort, None
+        target = resort["bin"]
+        pulled = len(resort["records"]) - max(resort["left"], 0)
+
+        # Their new piles hold their records now; keep only cards still there
+        target.cards = resort["records"][:len(resort["records"]) - pulled]
+        target.isFeeder = False
+        if not target.cards:
+            target.height = 0
+        target.processed = 0
+
+        try:
+            self._post("/resort/stop", {})
+        except Exception as error:
+            self._logger.warning("Could not tell the server re-sorting finished (%s)" % error)
+
+        self._logger.info("Re-sorting done: %d cards pulled from position %s" % (pulled, target.index))
+
+    # --- second photo after the drop ------------------------------------------
+
+    def _verify_drop(self, robot, destination):
         if not self._enabled() or self._camera is None or not self._endpoint():
             return
 
