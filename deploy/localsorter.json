@@ -11,6 +11,10 @@
   "max_distance": 80,
   "min_margin": 15,
   "set_margin": 4,
+  "region_image_size": "normal",
+  "ocr": "auto",
+  "tesseract_cmd": "tesseract",
+  "region_margin": 6.0,
   "price_currency": "usd",
   "include_digital": false
 }

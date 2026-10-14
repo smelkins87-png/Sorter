@@ -13,10 +13,13 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 
 from . import carddb, indexer, scryfall
 from .matcher import HashIndex
+from .ocr import Tesseract
+from .printing import PrintingResolver
 from .settings import Settings
 
 log = logging.getLogger("localsorter")
@@ -101,46 +104,79 @@ def cmd_serve(settings, args):
     return 0
 
 
-def _identify_file(app_index, conn, settings, path):
-    with open(path, "rb") as handle:
-        data = handle.read()
+class Pipeline:
+    """Both recognition stages, as the server runs them."""
 
-    started = time.monotonic()
-    match = app_index.identify(data, settings.max_distance, settings.min_margin, settings.set_margin)
-    elapsed = (time.monotonic() - started) * 1000
-    row = conn.execute("SELECT name, set_code, collector_number FROM cards WHERE id = ?",
-                       (match.card_id,)).fetchone() if match.card_id else None
+    def __init__(self, settings):
+        self.settings = settings
+        self.conn = carddb.connect(settings.db_path)
+        self.lock = threading.Lock()
+        self.index = HashIndex.from_db(self.conn, settings.include_digital)
+        tesseract = Tesseract(settings.tesseract_cmd) if settings.ocr != "off" else None
+        self.resolver = PrintingResolver(self.conn, self.lock, tesseract, settings.ocr, settings.region_margin)
 
-    return match, row, elapsed
+    def identify_file(self, path, foil_mode=0, lang="en"):
+        with open(path, "rb") as handle:
+            data = handle.read()
+
+        s = self.settings
+        started = time.monotonic()
+        match = self.index.identify(data, s.max_distance, s.min_margin, s.set_margin)
+        decision = None
+
+        if match.found:
+            decision = self.resolver.resolve(match, foil_mode, lang)
+            match.card_id, match.set_detected = decision.card_id, decision.set_detected
+
+        elapsed = (time.monotonic() - started) * 1000
+        row = self.conn.execute("SELECT name, set_code, collector_number, oracle_id FROM cards WHERE id = ?",
+                                (match.card_id,)).fetchone() if match.card_id else None
+
+        return match, decision, row, elapsed
 
 
 def cmd_identify(settings, args):
-    conn = carddb.connect(settings.db_path)
-    index = HashIndex.from_db(conn, settings.include_digital)
+    pipeline = Pipeline(settings)
 
     for path in args.images:
-        match, row, elapsed = _identify_file(index, conn, settings, path)
+        match, decision, row, elapsed = pipeline.identify_file(path, args.foil, args.lang)
         label = "%s (%s) #%s" % (row["name"], row["set_code"], row["collector_number"]) if row else "-"
         verdict = "MATCH" if match.found else "NO MATCH (closest)"
+        extra = ""
 
-        print("%s: %s %s  distance=%s margin=%s set_detected=%s  %.0f ms"
-              % (path, verdict, label, match.distance, match.margin, match.set_detected, elapsed))
+        if decision is not None:
+            extra = "  printing=%s%s%s" % (decision.method, "" if decision.set_detected else " (set not detected)",
+                                           "" if decision.foil is None else " foil=%d" % decision.foil)
+            if decision.lang:
+                extra += " lang=" + decision.lang
+
+        print("%s: %s %s  distance=%s margin=%s%s  %.0f ms"
+              % (path, verdict, label, match.distance, match.margin, extra, elapsed))
+
+        if args.verbose and decision is not None and decision.evidence:
+            print("    " + json.dumps(decision.evidence))
 
     return 0
 
 
 def cmd_eval(settings, args):
     """Labelled scans: a CSV with columns image + set + collector_number (or
-    image + scryfall_id). A day's scans.csv works once you fix wrong rows."""
-    conn = carddb.connect(settings.db_path)
-    index = HashIndex.from_db(conn, settings.include_digital)
+    image + scryfall_id). A day's scans.csv works once you fix wrong rows.
+
+    The number that matters most is "confidently wrong": a wrong card, or a
+    wrong printing reported with the set as detected. Everything flagged
+    "set not detected" can be checked by hand; a confident mistake can't."""
+    pipeline = Pipeline(settings)
+    conn = pipeline.conn
     base = os.path.dirname(os.path.abspath(args.labels))
-    stats = {"total": 0, "correct": 0, "correct_card_wrong_set": 0, "wrong": 0, "not_found": 0}
-    distances = {"correct": [], "wrong": []}
+    stats = {"total": 0, "not_found": 0, "right_printing": 0, "right_printing_but_set_not_detected": 0,
+             "right_card_other_printing_flagged": 0, "CONFIDENTLY_WRONG_printing": 0, "WRONG_card": 0}
+    distances = {"right card": [], "wrong card": []}
+    mistakes = []
 
     with open(args.labels, newline="", encoding="utf-8-sig") as handle:
         for label in csv.DictReader(handle):
-            path = os.path.join(base, label["image"])
+            path = os.path.join(base, label.get("image") or "")
 
             if not label.get("image") or not os.path.exists(path):
                 continue
@@ -156,26 +192,28 @@ def cmd_eval(settings, args):
                 expected = row["id"] if row else None
 
             expected = expected or label.get("scryfall_id")
+            truth = conn.execute("SELECT oracle_id FROM cards WHERE id = ?", (expected,)).fetchone() if expected else None
 
-            if not expected:
+            if truth is None:
                 continue
 
-            match, row, _ = _identify_file(index, conn, settings, path)
+            match, decision, row, _ = pipeline.identify_file(path)
             stats["total"] += 1
-
-            if match.card_id == expected:
-                distances["correct"].append(match.distance)
-            else:
-                distances["wrong"].append(match.distance)
+            same_card = row is not None and row["oracle_id"] == truth["oracle_id"]
+            distances["right card" if same_card else "wrong card"].append(match.distance)
 
             if not match.found:
                 stats["not_found"] += 1
             elif match.card_id == expected:
-                stats["correct"] += 1
+                stats["right_printing" if match.set_detected else "right_printing_but_set_not_detected"] += 1
+            elif same_card:
+                key = "CONFIDENTLY_WRONG_printing" if match.set_detected else "right_card_other_printing_flagged"
+                stats[key] += 1
+                if match.set_detected:
+                    mistakes.append((label["image"], row["set_code"], row["collector_number"], decision.evidence))
             else:
-                same = conn.execute("SELECT a.oracle_id = b.oracle_id FROM cards a, cards b WHERE a.id = ? AND b.id = ?",
-                                    (match.card_id, expected)).fetchone()
-                stats["correct_card_wrong_set" if same and same[0] else "wrong"] += 1
+                stats["WRONG_card"] += 1
+                mistakes.append((label["image"], row["name"], row["set_code"], None))
 
     print(json.dumps(stats, indent=2))
 
@@ -183,6 +221,9 @@ def cmd_eval(settings, args):
         if values:
             values.sort()
             print("%s distances: min=%d median=%d max=%d" % (key, values[0], values[len(values) // 2], values[-1]))
+
+    for mistake in mistakes:
+        print("mistake:", json.dumps(mistake))
 
     return 0
 
@@ -202,6 +243,8 @@ def main(argv=None):
     sub.add_parser("serve", help="run the API server")
     p_ident = sub.add_parser("identify", help="identify image files")
     p_ident.add_argument("images", nargs="+")
+    p_ident.add_argument("--foil", type=int, default=0, help="sorter foil setting: 0 none, 1 all, 2 detect")
+    p_ident.add_argument("--lang", default="en", help="sorter language setting (auto = read from card)")
     p_eval = sub.add_parser("eval", help="measure accuracy on labelled scans")
     p_eval.add_argument("labels", help="CSV with image + scryfall_id (or set + collector_number)")
 

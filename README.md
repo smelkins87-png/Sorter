@@ -19,12 +19,21 @@ camera ─► vendor sorter app ──POST /image/mtg──► localsorter (127.
 
 - `localsorter` implements the same HTTP API as `api2.magic-sorter.com`: recognition, set lists, popular cards, results upload, and config backup.
 - The vendor app, touchscreen and control panel only need their `endpoint` setting changed. No vendor files are modified.
-- **Recognition:**
+- **Recognition, stage 1 (which card):**
   1. Find the card in the photo with OpenCV and straighten it.
   2. Compute a 256-bit perceptual hash of the whole card and a 64-bit hash of the art box.
   3. Compare against hashes of every paper printing's Scryfall image, about 20–100 ms per card.
-
-  If several printings look identical (same art, same frame), the card is still reported, but marked "set not detected". That's the same flag the vendor uses.
+- **Recognition, stage 2 (which printing):** runs when other printings share the card's artwork, as reprints often do.
+  - **Set symbol:** the symbol's shape and rarity color are compared with close-ups of every look-alike printing. Only the pixels where those printings differ count, after correcting for exposure.
+  - **Collector info:** the bottom text is read with Tesseract and checked against what each printing should say:
+    - 2015+ frames: set code, collector number and rarity letter
+    - 2003 frame: collector number
+  - **Combining:** set code plus number agreeing settles it. Otherwise the symbol decides, and a weak text lead must agree with it. If the evidence doesn't single out one printing, the set is reported as **not detected** (the vendor's flag) instead of guessed.
+  - **Every decision is logged** with its evidence (method, OCR text) in the scan CSV and the sorter's results.
+  - **Extras:**
+    - Foil detection on 2015+ frames: foils print ★ instead of •. Use the sorter's "detect foil" setting.
+    - The card's language is read from the same line.
+    - Printings that only exist in foil (or only non-foil) are marked automatically.
 - **Prices:** Scryfall's daily bulk file includes TCGplayer market prices (USD; Cardmarket EUR optional). It is refreshed nightly at about 04:30.
 
 ## Install (on the sorter, over SSH)
@@ -32,8 +41,8 @@ camera ─► vendor sorter app ──POST /image/mtg──► localsorter (127.
 ```bash
 git clone <this repo> ~/localsorter && cd ~/localsorter
 sudo deploy/install.sh                       # user, files, services (no data yet)
-sudo systemctl start localsorter-sync        # first sync: card data + image hashes
-journalctl -fu localsorter-sync              #   (takes a few hours, resumable)
+sudo systemctl start localsorter-sync        # first sync: card data, image hashes and
+journalctl -fu localsorter-sync              #   printing close-ups (hours, resumable)
 curl -s http://127.0.0.1:8765/status         # "indexed_images" should be ~100k
 sudo deploy/lockdown.sh                      # switch the sorter over + block vendor hosts
 ```
@@ -91,6 +100,7 @@ mechanics, not real-world accuracy.
 ## Limitations
 
 - Magic only (Scryfall). English printings plus Scryfall's default printed language for each card.
-- Foil can't be told apart from one photo. Use the sorter's "all cards are foil" setting for foil batches.
-- Same-art reprints in the same frame style can't be told apart by image alone. They're flagged as "set not detected".
+- Foil detection reads the ★ on the collector line, so it only works on 2015-frame and newer cards. For older foils use the "all cards are foil" setting.
+- 1993/1997-frame reprints with identical art and no set symbol (e.g. Revised, Unlimited) can't be told apart from the image. They're flagged "set not detected".
+- Crop positions and thresholds come from synthetic tests. Calibrate them on real scans with `eval` before trusting set accuracy.
 - The "popular cards" rule uses EDHREC rank among format-legal cards, an approximation of the vendor's list.

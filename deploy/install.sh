@@ -30,6 +30,13 @@ if ! "$PY" -c "import numpy, PIL, cv2"; then
 fi
 echo "numpy, PIL and cv2 are available"
 
+step "Checking Tesseract (reads set code and collector number)"
+if ! command -v tesseract >/dev/null; then
+    echo "Installing tesseract-ocr"
+    apt-get install -y tesseract-ocr tesseract-ocr-eng
+fi
+tesseract --version | head -1
+
 step "Ensuring system user localsorter exists"
 if id -u localsorter >/dev/null 2>&1; then
     echo "User localsorter already exists"
