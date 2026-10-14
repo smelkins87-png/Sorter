@@ -67,6 +67,25 @@ chown localsorter:pi /home/pi/public/scans
 chmod 2775 /home/pi/public/scans
 echo "/var/lib/localsorter (localsorter) and /home/pi/public/scans (localsorter:pi, 2775) ready"
 
+step "Installing the verifydrop plugin (second photo after each drop)"
+PLUGIN_DIR=/home/pi/magic-sorter/magicsorter/plugins/verifydrop
+if [[ -d /home/pi/magic-sorter/magicsorter/plugins ]]; then
+    first_install=0
+    [[ -d $PLUGIN_DIR ]] || first_install=1
+    mkdir -p "$PLUGIN_DIR"
+    install -o pi -g pi -m 0644 plugin/verifydrop/__init__.py plugin/verifydrop/verifydrop.py "$PLUGIN_DIR/"
+    # Off until switched on from the touchscreen (System settings > Available plugins)
+    if [[ $first_install -eq 1 ]]; then
+        sudo -u pi touch "$PLUGIN_DIR/disabled.txt"
+    fi
+    chown -R pi:pi "$PLUGIN_DIR"
+    # Plugins load when the sorter software starts
+    systemctl try-restart magicsorter_py.service || true
+    echo "Installed in $PLUGIN_DIR ($( [[ -f $PLUGIN_DIR/disabled.txt ]] && echo switched off || echo switched on ))"
+else
+    echo "Sorter plugins folder not found; skipping"
+fi
+
 step "Installing /etc/localsorter.json"
 if [[ -e /etc/localsorter.json ]]; then
     echo "Keeping existing /etc/localsorter.json"

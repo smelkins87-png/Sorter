@@ -172,6 +172,81 @@ class App:
 
         return 200, {"result": card}
 
+    # Fields of the sorter's own record that a confirmed printing may update
+    REFINE_FIELDS = ("set", "num", "ext_id", "rarity", "price", "price_trend", "ecommerce_id", "extra",
+                     "confidence")
+
+    def verify(self, image, expected):
+        """POST /verify/<game>: the top card of the destination pile, photographed
+        after the drop, against the card the sorter meant to put there.
+
+        Results:
+          match       same card (and printing, as far as both photos can tell)
+          refined     same card; the first photo couldn't confirm the printing,
+                      this one does: `card` holds the corrected fields
+          printing_differs  same card, both photos confident about different
+                      printings (logged, never pauses)
+          mismatch    a different card is on top: missed drop, wrong pile...
+          unreadable  nothing recognised on the pile
+          skipped     the dropped card itself wasn't recognised
+        """
+        s = self.settings
+        payload = {"action": s.verify_mismatch_action}
+
+        if not expected.get("title"):
+            payload["result"] = "skipped"
+            return 200, payload
+
+        self.maybe_reload()
+        match = self.index.identify(image, s.max_distance, s.min_margin, s.set_margin)
+        card = None
+
+        if match.found:
+            try:
+                decision = self.resolver.resolve(match)
+                match.card_id, match.set_detected = decision.card_id, decision.set_detected
+            except Exception:
+                log.exception("Printing check failed during verification")
+
+            row = self.card_row(match.card_id)
+            if row is not None:
+                card = carddb.to_api_card(row, foil=expected.get("foil", 0), condition=expected.get("condition", "NM"),
+                                          currency=s.price_currency)
+                card["detect_set"] = 1 if match.set_detected else 0
+                card["confidence"] = match.confidence()
+
+        expected_sure = bool((expected.get("confidence") or {}).get("set_detected", True))
+
+        if card is None:
+            result = "unreadable"
+        elif card["title"] != expected["title"]:
+            result = "mismatch"
+        elif (card["set"], card["num"]) == (expected.get("set"), expected.get("num")):
+            result = "match"
+        elif card["detect_set"] and not expected_sure:
+            result = "refined"
+            payload["card"] = {k: card[k] for k in self.REFINE_FIELDS if k in card}
+        elif card["detect_set"] and expected_sure:
+            result = "printing_differs"
+        else:
+            result = "match"
+
+        payload["result"] = result
+        if card is not None:
+            payload["seen"] = {k: card[k] for k in ("title", "set", "num", "detect_set")}
+
+        try:
+            self.exporter.record_verification(expected, result, card, match, image)
+        except OSError as error:
+            log.warning("Could not write verification log: %s", error)
+
+        level = logging.WARNING if result == "mismatch" else logging.INFO
+        log.log(level, "Drop check %s: expected %s (%s #%s), saw %s", result, expected.get("title"),
+                expected.get("set"), expected.get("num"),
+                "%s (%s #%s)" % (card["title"], card["set"], card["num"]) if card else "nothing")
+
+        return 200, payload
+
     def sets(self, params):
         orderby = params.get("orderby", ["released_at"])[0]
         orderdir = params.get("orderdir", ["desc"])[0].lower()
@@ -351,6 +426,21 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "Missing image"})
 
                 return self._send(*self.app.identify(files["image"], params))
+
+            if len(parts) == 2 and parts[0] == "verify":
+                if parts[1] != "mtg":
+                    return self._send(200, {"result": "skipped"})
+
+                files = parse_multipart(self.headers.get("Content-Type", ""), body)
+
+                if not files.get("image"):
+                    return self._send(400, {"error": "Missing image"})
+
+                expected = json.loads(files.get("expected") or b"{}")
+                if not isinstance(expected, dict):
+                    return self._send(400, {"error": "expected must be an object"})
+
+                return self._send(*self.app.verify(files["image"], expected))
 
             if parts == ["mail"]:
                 files = parse_multipart(self.headers.get("Content-Type", ""), body)

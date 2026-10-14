@@ -57,6 +57,12 @@ class Settings:
     # printings apart, e.g. Beta (black) from Unlimited (white)
     border_check: bool = True
 
+    # Second photo after each drop (the "verifydrop" plugin, switched on in the
+    # touchscreen's System settings > Available plugins). When the second photo
+    # disagrees with the first: "manual_bin" (move the card to the bin for
+    # unrecognised cards), "pause" the sorter, or just "warn" in the log
+    verify_mismatch_action: str = "manual_bin"
+
     # Price returned to the sorter: "usd" (TCGplayer market via Scryfall) or "eur"
     price_currency: str = "usd"
 
