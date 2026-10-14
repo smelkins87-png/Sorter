@@ -133,6 +133,10 @@ class FakePosition(object):
 
 
 class FakeFrame(object):
+    # Frame4's travel
+    max_x = 440
+    max_y = 430
+
     def __init__(self):
         self.moves = []
 
@@ -206,7 +210,7 @@ def plugin_module(monkeypatch, tmp_path):
     return module
 
 
-def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765", fail=False):
+def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765", fail=False, x=100.0):
     config = {"endpoint": endpoint, "card_offset": offsets or {"x": 4, "y": 2}}
     plugin = plugin_module.Verifydrop(config)
     plugin.onCameraPicTaken({"game": "mtg"}, types.SimpleNamespace(
@@ -215,7 +219,7 @@ def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765"
     asked = []
     plugin._ask = lambda photo, expected: asked.append(expected) or answer
 
-    destination = FakePosition(3, 100.0, 50.0, height=12.0)
+    destination = FakePosition(3, x, 50.0, height=12.0)
     destination.processed = 5
     record = {"uuid": "u1", "title": "Card 1", "set": "LEB", "num": "1", "confidence": {"set_detected": True}}
     destination.cards = [{"title": "Older"}, record]
@@ -314,3 +318,12 @@ def test_never_runs_against_the_vendor_cloud(plugin_module):
     robot, *_, asked = _setup(plugin_module, {"result": "match"}, endpoint="https://api2.magic-sorter.com")
 
     assert robot._frame.moves == [] and asked == []
+
+
+def test_piles_the_camera_cannot_reach_are_not_checked(plugin_module):
+    # 400 + 55 + 4 is past Frame4's 440 mm: the move would be clamped short
+    robot, destination, bin_position, record, asked = _setup(
+        plugin_module, {"result": "mismatch", "action": "manual_bin"}, x=400.0)
+
+    assert robot._frame.moves == [] and asked == []
+    assert robot._movements.grabbed == [] and destination.cards[-1] is record

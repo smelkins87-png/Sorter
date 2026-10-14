@@ -56,6 +56,7 @@ class Verifydrop(PluginBase):
         super(Verifydrop, self).__init__(config)
         self._camera = None
         self._game = "mtg"
+        self._unreachable = set()
 
     @staticmethod
     def get_version():
@@ -116,8 +117,19 @@ class Verifydrop(PluginBase):
         offsets = self._sorter_config.get("card_offset", {})
         x = destination.coords["x"] + CAMERA_OFFSET_X + offsets.get("x", 0)
         y = destination.coords["y"] + max(offsets.get("y", 0), MIN_OFFSET_Y)
-
         frame = robot._frame
+
+        # The frame clamps moves to its travel (Frame4: x <= 440, y <= 430).
+        # A clamped move would leave the camera short of the pile, and a photo
+        # of the wrong spot must never send a good card to the manual bin
+        max_x, max_y = getattr(frame, "max_x", 0), getattr(frame, "max_y", 0)
+        if (max_x and x > max_x) or (max_y and y > max_y) or x < 0 or y < 0:
+            if destination.index not in self._unreachable:
+                self._unreachable.add(destination.index)
+                self._logger.warning("Drop check: the camera can't reach position %s (needs x=%.0f y=%.0f), "
+                                     "not checking it" % (destination.index, x, y))
+            return None
+
         frame.move(x, y, None)
         frame.waitMoveCompletes()
 
