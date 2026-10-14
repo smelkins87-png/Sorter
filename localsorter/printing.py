@@ -231,11 +231,20 @@ class PrintingResolver:
         best_row = rows[best_id]
         pool |= {cid for cid in near if rows[cid]["oracle_id"] == best_row["oracle_id"]}
 
+        decision = Decision(card_id=best_id, set_detected=True)
+
         if allowed_sets:
             allowed = {s.upper() for s in allowed_sets}
-            pool = {cid for cid in pool if rows[cid]["set_code"] in allowed} or {best_id}
+            pool = {cid for cid in pool if rows[cid]["set_code"] in allowed}
 
-        decision = Decision(card_id=best_id, set_detected=True)
+            if not pool:
+                # No look-alike in the requested sets: report the match, not confidently
+                pool = {best_id}
+                decision.set_detected = False
+
+        # The hash's pick may be outside the pool (filtered out by set): then
+        # the printing has to be confirmed by the symbol or the text
+        substitute = best_id not in pool
         evidence = decision.evidence
         distinct = {(rows[c]["set_code"], rows[c]["collector_number"]) for c in pool}
 
@@ -244,7 +253,7 @@ class PrintingResolver:
         foil_choice = len(carddb.finishes_of(best_row) & {"foil", "nonfoil"}) == 2
         want_ocr = self.tesseract is not None and self.tesseract.available and sides and (
             self.ocr_mode == "always" or (self.ocr_mode == "auto" and (
-                len(distinct) > 1 or lang_hint == "auto" or (foil_mode == 2 and foil_choice))))
+                len(distinct) > 1 or substitute or lang_hint == "auto" or (foil_mode == 2 and foil_choice))))
 
         text = ""
         if want_ocr and match.located is not None:
@@ -257,7 +266,7 @@ class PrintingResolver:
                 pool |= extra
                 distinct = {(rows[c]["set_code"], rows[c]["collector_number"]) for c in pool}
 
-        if len(distinct) > 1:
+        if len(distinct) > 1 or substitute:
             self._choose(decision, match, pool, rows, text)
 
         chosen = rows[decision.card_id]
