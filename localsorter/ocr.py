@@ -16,6 +16,7 @@ appear in what Tesseract read, tolerating the usual confusions (0/O, 1/I...).
 """
 import io
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -77,7 +78,10 @@ class Tesseract:
                 # skipping its inverted second pass roughly halves the time
                 [self.command, "stdin", "stdout", "--psm", str(psm), "-l", "eng",
                  "-c", "tessedit_do_invert=0"],
-                input=buf.getvalue(), capture_output=True, timeout=self.timeout, check=False)
+                input=buf.getvalue(), capture_output=True, timeout=self.timeout, check=False,
+                # Tesseract's OpenMP threads make tiny images *slower*, and on
+                # a busy 4-core Pi can stall for many seconds
+                env=dict(os.environ, OMP_THREAD_LIMIT="1"))
         except (OSError, subprocess.TimeoutExpired) as error:
             log.warning("Tesseract failed: %s", error)
             return ""
@@ -142,14 +146,16 @@ def parse(text):
     for match in re.finditer(r"(\d{1,4})\s*/\s*(\d{1,4})", text):
         info["pairs"].append((match.group(1).lstrip("0") or "0", match.group(2).lstrip("0") or "0"))
 
-    # "DOM • EN" / "DOM ★ EN": code, separator, language
-    for match in re.finditer(r"\b([A-Za-z0-9]{2,5})\s*(\S)\s*([A-Za-z]{2})\b", text):
-        sep, lang = match.group(2), match.group(3).upper()
+    # "DOM • EN" / "DOM ★ EN": code, separator, language, on one line. The
+    # lookahead lets matches overlap, so junk before the code can't hide it
+    for line in text.splitlines():
+        for match in re.finditer(r"(?=\b([A-Za-z0-9]{2,5})[ \t]*(\S)[ \t]*([A-Za-z]{2})\b)", line):
+            sep, lang = match.group(2), match.group(3).upper()
 
-        if lang in PRINTED_LANGS and (sep in _STAR or sep in _DOT):
-            info["lang"] = PRINTED_LANGS[lang]
-            info["foil"] = sep in _STAR
-            break
+            if lang in PRINTED_LANGS and (sep in _STAR or sep in _DOT):
+                info["lang"] = PRINTED_LANGS[lang]
+                info["foil"] = sep in _STAR
+                return info
 
     return info
 
@@ -187,7 +193,9 @@ def score_candidates(text, candidates):
             number_parts.add(parts[0].lstrip("0") or "0")
 
         for part in parts:
-            for candidate in (part, part.rstrip("CURM5")):
+            # "0045M": number glued to its rarity letter. Only letters: canon()
+            # turns S into 5, and stripping digits would turn 125 into 12
+            for candidate in (part, re.sub(r"(?<=\d)[CURM]$", "", part)):
                 if len(candidate) >= 2:
                     number_parts.add(candidate)
 
