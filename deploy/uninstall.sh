@@ -2,11 +2,11 @@
 # Removes the localsorter services, timer and package from /opt/localsorter.
 # Keeps the card database, the settings file, the localsorter user and all scans.
 #
-# Usage:   sudo deploy/uninstall.sh
+# Usage:   sudo bash deploy/uninstall.sh
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
-    echo "Usage: sudo deploy/uninstall.sh" >&2
+    echo "Usage: sudo bash deploy/uninstall.sh" >&2
     exit 1
 fi
 
@@ -38,4 +38,4 @@ echo "  system user:              localsorter"
 
 step "Reminder"
 echo "The sorter still points at this server until you restore the vendor endpoint:"
-echo "  sudo deploy/lockdown.sh --undo"
+echo "  sudo bash deploy/lockdown.sh --undo"

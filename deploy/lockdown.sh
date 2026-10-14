@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Cuts the Magic Sorter off from the vendor cloud and points it at localsorter.
 #
-#   sudo deploy/lockdown.sh            point the sorter at the local server and
+#   sudo bash deploy/lockdown.sh            point the sorter at the local server and
 #                                      block the vendor/telemetry hosts
-#   sudo deploy/lockdown.sh --strict   ...and add a firewall: nothing but the
+#   sudo bash deploy/lockdown.sh --strict   ...and add a firewall: nothing but the
 #                                      localsorter sync (and apt) may reach the
 #                                      internet; the LAN keeps working
-#   sudo deploy/lockdown.sh --undo     restore the vendor setup
+#   sudo bash deploy/lockdown.sh --undo     restore the vendor setup
 #
 # Safe to re-run. Run deploy/install.sh first.
 set -euo pipefail

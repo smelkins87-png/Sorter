@@ -2,14 +2,14 @@
 # Installs localsorter on the Raspberry Pi. Safe to re-run: the package and the
 # units are replaced, while the settings file, card database and scans are kept.
 #
-# Usage, from the repository root:   sudo deploy/install.sh
+# Usage, from the repository root:   sudo bash deploy/install.sh
 set -euo pipefail
 
 # The units run /usr/bin/python3, so check that interpreter specifically
 PY=/usr/bin/python3
 
 usage() {
-    echo "Usage: sudo deploy/install.sh   (run from the repository root)" >&2
+    echo "Usage: sudo bash deploy/install.sh   (run from the repository root)" >&2
     exit 1
 }
 
@@ -100,5 +100,5 @@ cat <<'EOF'
      curl -s http://127.0.0.1:8765/status
 
 3. Once the index is ready, point the sorter at this server:
-     sudo deploy/lockdown.sh
+     sudo bash deploy/lockdown.sh
 EOF
