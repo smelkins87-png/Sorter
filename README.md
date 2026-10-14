@@ -100,7 +100,7 @@ During first-boot setup, before the lockdown is in place, the vendor software ma
 - **When the photos disagree** (a different card, or two confident but different printings), the card is picked back up and put in the bin for unrecognised cards, for a manual check. Its record moves with it, tagged with the reason.
 - **Other actions:** set `"verify_mismatch_action"` in `/etc/localsorter.json` to `"pause"` or `"warn"` instead.
 - **Refining:** if the first photo couldn't confirm the printing and the second one can, the sorter's results are corrected.
-- **Logs:** every check goes to `verify.csv` next to that day's scans, with the photo.
+- **Logs:** every check goes to `verify.csv` next to that day's scans. The second photo is only used for the check and isn't saved; only the first photo of each card is kept.
 - **Cost:** a short move, a photo and an identification per card (expect roughly +0.5–1 s; measure it on your machine). Moving a card to the manual bin takes a few seconds more.
 
 **Optional dark theme for the touchscreen:** `sudo bash deploy/theme.sh` (undo with `--undo`).

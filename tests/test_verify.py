@@ -105,7 +105,9 @@ def test_checks_are_logged(app, tmp_path):
 
     assert rows[-1]["result"] == "mismatch"
     assert rows[-1]["expected_set"] == "LEB" and rows[-1]["seen_title"] == "Card 5"
-    assert (tmp_path / "scans" / day / rows[-1]["image"]).exists()
+    # The second photo is only for the check: not kept
+    assert "image" not in rows[-1]
+    assert not list((tmp_path / "scans" / day).glob("images/*_drop.jpg"))
     # A check is not a new scan
     assert not (tmp_path / "scans" / day / "scans.csv").exists()
 
@@ -402,3 +404,19 @@ def test_piles_the_camera_cannot_reach_are_not_checked(plugin_module):
 
     assert robot._frame.moves == [] and asked == []
     assert robot._movements.grabbed == [] and destination.cards[-1] is record
+
+
+def test_log_started_by_an_earlier_version_keeps_its_columns(tmp_path):
+    from localsorter.exporter import Exporter
+
+    day = datetime.now().strftime("%Y-%m-%d")
+    (tmp_path / day).mkdir()
+    old = ["timestamp", "uuid", "result", "expected_title", "expected_set", "expected_number",
+           "seen_title", "seen_set", "seen_number", "seen_set_detected", "distance", "image"]
+    (tmp_path / day / "verify.csv").write_text(",".join(old) + "\r\n", encoding="utf-8-sig")
+
+    Exporter(str(tmp_path)).record_verification({"uuid": "u1", "title": "Card 1"}, "match", {"title": "Card 1"})
+
+    with open(tmp_path / day / "verify.csv", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows == [dict(rows[0], result="match", image="")] and rows[0]["seen_title"] == "Card 1"

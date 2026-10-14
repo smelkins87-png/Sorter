@@ -256,7 +256,7 @@ class App:
             payload["seen"] = {k: card[k] for k in ("title", "set", "num", "detect_set")}
 
         try:
-            self.exporter.record_verification(expected, result, card, match, image)
+            self.exporter.record_verification(expected, result, card, match)
         except OSError as error:
             log.warning("Could not write verification log: %s", error)
 

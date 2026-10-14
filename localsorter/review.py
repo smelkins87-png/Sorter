@@ -272,11 +272,11 @@ class Review:
 
         return row["symbol"] if row else None
 
-    def image(self, day, uuid, thumb=False, drop=False):
+    def image(self, day, uuid, thumb=False):
         if not UUID_RE.match(uuid or ""):
             raise ValueError("Invalid scan id")
 
-        path = os.path.join(self._day_dir(day), "images", uuid + ("_drop" if drop else "") + ".jpg")
+        path = os.path.join(self._day_dir(day), "images", uuid + ".jpg")
 
         if not os.path.exists(path):
             return None
@@ -482,8 +482,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if parts == ["api", "search"]:
                 return self._send(200, review.search(params.get("q")))
             if parts[:2] == ["api", "image"] and len(parts) == 4:
-                data = review.image(parts[2], parts[3], thumb=params.get("size") == "thumb",
-                                    drop=params.get("drop") == "1")
+                data = review.image(parts[2], parts[3], thumb=params.get("size") == "thumb")
                 return self._send(200, data, "image/jpeg", cache=True) if data else self._send(404, {"error": "No image"})
             if parts[:2] == ["api", "closeup"] and len(parts) == 3:
                 data = review.closeup(parts[2])

@@ -99,24 +99,17 @@ class Exporter:
         self._maybe_cleanup()
 
     VERIFY_COLUMNS = ["timestamp", "uuid", "result", "expected_title", "expected_set", "expected_number",
-                      "seen_title", "seen_set", "seen_number", "seen_set_detected", "distance", "image"]
+                      "seen_title", "seen_set", "seen_number", "seen_set_detected", "distance"]
 
-    def record_verification(self, expected, result, card=None, match=None, image_bytes=None):
-        """Logs one after-drop check to <day>/verify.csv (photo optional)."""
+    def record_verification(self, expected, result, card=None, match=None):
+        """Logs one after-drop check to <day>/verify.csv. The second photo
+        is only for the check: it isn't kept."""
         now = datetime.now()
         card = card or {}
         card_uuid = expected.get("uuid") or "unknown"
 
         with self._lock:
             day_dir = self._day_dir(now)
-            image_rel = ""
-
-            if self.save_images and image_bytes:
-                os.makedirs(os.path.join(day_dir, "images"), exist_ok=True)
-                image_rel = os.path.join("images", os.path.basename(card_uuid) + "_drop.jpg")
-
-                with open(os.path.join(day_dir, image_rel), "wb") as handle:
-                    handle.write(image_bytes)
 
             row = {
                 "timestamp": now.isoformat(timespec="seconds"),
@@ -130,13 +123,18 @@ class Exporter:
                 "seen_number": card.get("num", ""),
                 "seen_set_detected": card.get("detect_set", ""),
                 "distance": getattr(match, "distance", ""),
-                "image": image_rel,
             }
             path = os.path.join(day_dir, "verify.csv")
             new_file = not os.path.exists(path)
+            columns = self.VERIFY_COLUMNS
+
+            if not new_file:
+                # Keep the columns of a log started by an earlier version
+                with open(path, newline="", encoding="utf-8-sig") as handle:
+                    columns = next(csv.reader(handle), None) or columns
 
             with open(path, "a", newline="", encoding="utf-8-sig" if new_file else "utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=self.VERIFY_COLUMNS)
+                writer = csv.DictWriter(handle, fieldnames=columns, restval="", extrasaction="ignore")
 
                 if new_file:
                     writer.writeheader()

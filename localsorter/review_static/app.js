@@ -162,8 +162,8 @@ function card(scan) {
     el("div", { class: "actions" }, actions));
 }
 
-function imageUrl(scan, thumb, drop) {
-  return "/api/image/" + state.day + "/" + scan.uuid + "?" + (thumb ? "size=thumb" : "") + (drop ? "&drop=1" : "");
+function imageUrl(scan, thumb) {
+  return "/api/image/" + state.day + "/" + scan.uuid + (thumb ? "?size=thumb" : "");
 }
 
 // --- labelling ---------------------------------------------------------------
@@ -187,8 +187,6 @@ async function setLabel(scan, status, cardId) {
 async function openFix(scan) {
   state.editing = scan;
   $("fix-photo").src = scan.has_image ? imageUrl(scan, false) : "";
-  $("fix-drop-box").hidden = !scan.drop_check;
-  if (scan.drop_check) $("fix-drop").src = imageUrl(scan, false, true);
   $("fix-why").textContent = scan.reasons.join(" · ") + (scan.drop_seen ? " — second photo: " + scan.drop_seen : "");
   $("search").value = "";
   $("results").replaceChildren();
