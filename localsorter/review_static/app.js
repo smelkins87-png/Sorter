@@ -136,6 +136,7 @@ function card(scan) {
   } else {
     for (const reason of scan.reasons) badges.push(el("span", { class: "badge" }, reason));
   }
+  if (scan.resorted) badges.push(el("span", { class: "badge ok", title: "Pulled back out of the manual-check bin and sorted with your verdict" }, "re-sorted"));
   if (scan.border && scan.border !== "black") badges.push(el("span", { class: "badge ok" }, scan.border + " border"));
 
   const image = scan.has_image
@@ -246,13 +247,16 @@ $("not-card").addEventListener("click", async () => {
 
 // --- the sorter's state ---------------------------------------------------------
 
-let lastStatus = "";
+let lastStatus = null;
+let lastReload = 0;
 
 async function pollStatus() {
   try {
     const status = await api("/api/status");
     const banner = $("banner");
-    const key = JSON.stringify(status);
+    // Reload the scans when the sorter pauses, starts or finishes re-sorting,
+    // and every 15 s while it re-sorts: not on every card
+    const key = (status.waiting_review ? "waiting" : "") + (status.resorting ? "resorting" : "");
 
     if (status.waiting_review) {
       const w = status.waiting_review;
@@ -271,8 +275,12 @@ async function pollStatus() {
       banner.hidden = true;
     }
 
-    // Something changed on the sorter: new scans may have arrived
-    if (lastStatus && key !== lastStatus && state.day) await loadScans();
+    const changed = lastStatus !== null && key !== lastStatus;
+    const due = status.resorting && Date.now() - lastReload > 15000;
+    if ((changed || due) && state.day) {
+      lastReload = Date.now();
+      await loadScans();
+    }
     lastStatus = key;
   } catch (error) {
     /* the page keeps working without the banner */

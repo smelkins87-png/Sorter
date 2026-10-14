@@ -14,7 +14,8 @@ and response shapes mirror what the vendor code reads:
     GET|POST /device/config   config backup/restore
     POST /user/preferences    user preferences
     GET  /status              local health info (not used by the sorter)
-    POST /resort/start|stop   the plugin re-sorting the manual-check bin with
+    GET  /last-not-found      uuid of the last card not recognised (plugin)
+    POST /resort/start|stop|waiting   the plugin re-sorting the manual-check bin with
                               the review page's verdicts (resort.py)
 """
 import csv
@@ -133,8 +134,9 @@ class App:
         card_uuid = str(uuid.uuid4())
         s = self.settings
 
-        if self.resort is not None:
-            answer = self._resort_answer(image, card_uuid, condition, foil, lang)
+        resort = self.resort
+        if resort is not None:
+            answer = self._resort_answer(resort, image, card_uuid, condition, foil, lang)
             if answer is not None:
                 return answer
 
@@ -179,6 +181,7 @@ class App:
 
         if card is None:
             log.info("Not found (distance=%s margin=%s)", match.distance, match.margin)
+            self.last_not_found = card_uuid
             return 404, {"error": "Card not found", "uuid": card_uuid}
 
         log.info("Matched %s (%s) #%s distance=%s margin=%s via %s%s", card["title"], card["set"], card["num"],
@@ -231,12 +234,14 @@ class App:
                 card["confidence"] = match.confidence()
 
         expected_sure = bool((expected.get("confidence") or {}).get("set_detected", True))
+        # Printing chosen on the review page: a person looked, the photo can't overrule it
+        reviewed = ((expected.get("confidence") or {}).get("printing") or {}).get("method") == "review"
 
         if card is None:
             result = "unreadable"
         elif card["title"] != expected["title"]:
             result = "mismatch"
-        elif (card["set"], card["num"]) == (expected.get("set"), expected.get("num")):
+        elif (card["set"], card["num"]) == (expected.get("set"), expected.get("num")) or reviewed:
             result = "match"
         elif card["detect_set"] and not expected_sure:
             result = "refined"
@@ -270,9 +275,11 @@ class App:
         with self.db_lock, self.conn:
             self.conn.executescript(LABELS_SCHEMA)
 
-        self.resort = ResortSession(self.settings.export_dir, self.conn, self.db_lock, uuids)
-        self.waiting_review = None
-        return 200, {"result": "ok", "cards": len(self.resort.queue)}
+        # A run that ended without /resort/stop leaves no verdicts behind
+        self.resort = None
+        resort = ResortSession(self.settings.export_dir, self.conn, self.db_lock, uuids)
+        self.resort, self.waiting_review = resort, None
+        return 200, {"result": "ok", "cards": len(resort.queue)}
 
     def resort_waiting(self, data):
         try:
@@ -293,15 +300,18 @@ class App:
     def resort_stop(self):
         self.resort = None
         self.waiting_review = None
+        # The vendor app gives not-found cards its own uuid; the plugin asks
+        # for ours so the bin's records point at the saved photos
+        self.last_not_found = None
         log.info("Re-sort finished")
         return 200, {"result": "ok"}
 
-    def _resort_answer(self, image, card_uuid, condition, foil, lang):
+    def _resort_answer(self, resort, image, card_uuid, condition, foil, lang):
         """The review page's verdict for a card pulled back out of the bin,
         or None to identify it the usual way."""
         from .imagehash import locate
 
-        kind, label = self.resort.match(locate(image))
+        kind, label = resort.match(locate(image))
 
         if kind in ("unknown", "unreviewed"):
             return None
@@ -314,6 +324,7 @@ class App:
             reason = "ambiguous copies" if kind == "ambiguous" else "reviewed: not a card"
             log.info("Re-sort: %s, back to the manual check", reason)
             self.exporter.record(card_uuid, image, None, None, condition=condition, foil=foil)
+            self.last_not_found = card_uuid
             return 404, {"error": "Card not found", "uuid": card_uuid}
 
         card = carddb.to_api_card(row, foil=foil, condition=condition, lang=lang, currency=self.settings.price_currency)
@@ -324,7 +335,7 @@ class App:
         class Reviewed(object):
             distance = margin = ""
             set_detected = True
-            printing = {"method": "review"}
+            printing = {"method": "review", "reviewed_scan": label["uuid"]}
 
         self.exporter.record(card_uuid, image, card, Reviewed(), condition=condition, foil=foil)
         log.info("Re-sort: %s (%s #%s) from the review", card["title"], card["set"], card["num"])
@@ -491,6 +502,9 @@ class Handler(BaseHTTPRequestHandler):
 
             if parts == ["status"] or not parts:
                 return self._send(*self.app.status())
+
+            if parts == ["last-not-found"]:
+                return self._send(200, {"uuid": self.app.last_not_found})
         except Exception as error:
             log.exception("Request failed")
             return self._send(500, {"error": str(error)})

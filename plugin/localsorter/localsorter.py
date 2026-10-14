@@ -72,9 +72,10 @@ class Localsorter(PluginBase):
         self._camera = None
         self._game = "mtg"
         self._unreachable = set()
-        # While pulling cards back out of the manual-check bin:
-        # {"bin": position, "left": cards still to pull, "records": its cards}
+        # While pulling cards back out of the manual-check bin: {"bin": position}
         self._resort = None
+        # Scans already offered for review this run: never asked about twice
+        self._offered = set()
 
     @staticmethod
     def get_version():
@@ -103,24 +104,58 @@ class Localsorter(PluginBase):
         self._camera = camera_obj
         self._game = commandData.get("game", "mtg")
 
+    def onCameraCardNotFound(self, commandData, card, card_art):
+        # The sorter files a card it doesn't know under a uuid of its own;
+        # use the server's, which names the saved photo the review page shows
+        if not self._endpoint():
+            return
+
+        try:
+            uuid = self._get("/last-not-found").get("uuid")
+        except Exception as error:
+            self._logger.debug("Could not fetch the scan id (%s)" % error)
+            return
+
+        if uuid:
+            card["uuid"] = uuid
+
+    def onRobotBeforeRun(self, robot):
+        # A new run (the plate was reset): nothing from the last one applies.
+        # The robot stops without asking for another feeder, so a re-sort
+        # cut short by Stop ends here
+        self._offered = set()
+
+        if self._resort is not None:
+            self._resort = None
+            self._tell_server("/resort/stop", {})
+
     def onRobotReleaseCard(self, robot, feeder, destination):
-        # Count the cards pulled back out of the manual-check bin
         if self._resort is not None and feeder is self._resort["bin"]:
-            self._resort["left"] -= 1
+            self._pulled(feeder, destination)
 
         self._verify_drop(robot, destination)
+
+    def onRobotStopToken(self, robot, feeder):
+        # The sorter wouldn't take the card it just photographed from the bin
+        # (a stop token, or a mess detected): leave the rest where it is
+        if self._resort is not None and feeder is self._resort["bin"]:
+            self._logger.warning("Re-sorting stopped: the sorter refused a card from the manual-check bin")
+            self._finish_resort()
 
     def onRobotGetNextFeeder(self, robot):
         """Feeds the manual-check bin back in after a review (resortbin).
         Returning None leaves the choice to the sorter."""
         if self._resort is not None:
-            if self._resort["left"] > 0 and robot._running:
-                return self._resort["bin"]
+            target = self._resort["bin"]
+
+            # enabled again: the touchscreen's "empty Not Found" cleared it
+            if target.cards and not target.enabled and robot._running:
+                return target
 
             self._finish_resort()
             return None
 
-        if not self._switched_on(RESORT_SWITCH_DIR) or not self._endpoint():
+        if not self._switched_on(RESORT_SWITCH_DIR) or not self._endpoint() or self._layer_sorting():
             return None
 
         plate = robot._plate
@@ -130,7 +165,7 @@ class Localsorter(PluginBase):
             return None
 
         bins = [p for p in plate.get_positions_flat() if self._is_manual_bin(p)]
-        waiting = [b for b in bins if any(card.get("uuid") for card in b.cards)]
+        waiting = [b for b in bins if self._new_scans(b)]
 
         if not waiting:
             return None
@@ -142,6 +177,9 @@ class Localsorter(PluginBase):
             self._logger.warning("Re-sorting the manual-check bin needs a second bin for unrecognised cards")
             return None
 
+        # Asked once: whatever is still in a bin after this round stays for a manual check
+        self._offered.update(self._new_scans(target))
+
         self._logger.warning("%d cards in the manual-check bin (position %s). Review them at %s, then press "
                              "Resume to sort them, or Stop to finish." % (len(target.cards), target.index,
                                                                          self._review_url()))
@@ -152,13 +190,28 @@ class Localsorter(PluginBase):
         while robot._pause and robot._running:
             time.sleep(0.2)
 
-        if not robot._running:
+        if not robot._running or not any(card.get("uuid") for card in target.cards):
+            # Stopped, or resumed with "empty Not Found": nothing to pull
             self._tell_server("/resort/waiting", {"cards": 0})
             return None
 
         return self._start_resort(robot, target)
 
     # --- re-sorting the manual-check bin -----------------------------------
+
+    def _new_scans(self, position):
+        return [card["uuid"] for card in position.cards if card.get("uuid") and card["uuid"] not in self._offered]
+
+    @staticmethod
+    def _layer_sorting():
+        """Title/set/team sorting swaps feeders and sinks between passes;
+        its piles aren't the manual-check bin's to take."""
+        try:
+            from lib.matcher.matcher import Matcher
+        except ImportError:
+            return False
+
+        return bool(Matcher.layer_ordering)
 
     @staticmethod
     def _is_manual_bin(position):
@@ -184,13 +237,21 @@ class Localsorter(PluginBase):
 
         return "http://%s.local:%d" % (socket.gethostname(), port)
 
-    def _post(self, path, data):
+    def _post(self, path, data, timeout=60):
         import requests
 
-        return requests.post(self._endpoint() + path, json=data, timeout=60).json()
+        return requests.post(self._endpoint() + path, json=data, timeout=timeout).json()
+
+    def _get(self, path):
+        import requests
+
+        return requests.get(self._endpoint() + path, timeout=5).json()
 
     def _tell_server(self, path, data):
-        """Best effort: only feeds the review page's banner."""
+        """Best effort: the banner, or tidying up."""
+        if not self._endpoint():
+            return
+
         try:
             self._post(path, data)
         except Exception as error:
@@ -201,39 +262,61 @@ class Localsorter(PluginBase):
         uuids = [card["uuid"] for card in reversed(target.cards) if card.get("uuid")]
 
         try:
-            self._post("/resort/start", {"uuids": uuids})
+            # Hashing every photo in the bin takes a while on the Pi
+            self._post("/resort/start", {"uuids": uuids}, timeout=600)
         except Exception as error:
             self._logger.warning("Could not start re-sorting (%s)" % error)
+            self._tell_server("/resort/stop", {})
             return None
 
-        # Measure the pile like a feeder; a feeder is never a destination, so
-        # nothing gets dropped back on the pile being emptied
+        # Measure the pile like a feeder. Disabled, it's never a destination,
+        # so nothing gets dropped back on the pile being emptied; unlike a
+        # feeder, its cards still count in the results if the run stops
         robot._plate.probeFeedingPositions([target])
-        target.isFeeder = True
+        target.enabled = False
 
-        self._resort = {"bin": target, "left": len(target.cards), "records": list(target.cards)}
+        self._resort = {"bin": target, "pulled": 0, "robot": robot}
         self._logger.info("Re-sorting %d cards from position %s" % (len(target.cards), target.index))
 
         return target
 
+    def _pulled(self, target, destination):
+        """A card left the bin: its record moves with it, so the bin's list
+        (and the results file) only holds the cards still in it."""
+        self._resort["pulled"] += 1
+        new = destination.cards[-1] if destination.cards else {}
+        reviewed = ((new.get("confidence") or {}).get("printing") or {}).get("reviewed_scan")
+
+        # Still in a bin for unrecognised cards: a manual check, no new round
+        if new.get("uuid"):
+            self._offered.add(new["uuid"])
+
+        # The pile may have been disturbed: the photo said which scan it was
+        for i, card in enumerate(target.cards):
+            if reviewed and card.get("uuid") == reviewed:
+                del target.cards[i]
+                return
+
+        if target.cards:
+            target.cards.pop()
+
     def _finish_resort(self):
         resort, self._resort = self._resort, None
         target = resort["bin"]
-        pulled = len(resort["records"]) - max(resort["left"], 0)
 
-        # Their new piles hold their records now; keep only cards still there
-        target.cards = resort["records"][:len(resort["records"]) - pulled]
-        target.isFeeder = False
-        if not target.cards:
+        # A destination again. Its height is tracked from drops, never
+        # under the real pile: the probed height less the cards taken
+        target.enabled = True
+        if target.cards:
+            card_height = resort["robot"]._game_details.get_card_height()
+            target.height = max(0.0, target.height - target.processed * card_height)
+        else:
             target.height = 0
         target.processed = 0
 
-        try:
-            self._post("/resort/stop", {})
-        except Exception as error:
-            self._logger.warning("Could not tell the server re-sorting finished (%s)" % error)
-
-        self._logger.info("Re-sorting done: %d cards pulled from position %s" % (pulled, target.index))
+        self._tell_server("/resort/stop", {})
+        self._logger.info("Re-sorting done: %d cards pulled from position %s, %d left in it"
+                          % (resort["pulled"], target.index, len(target.cards)))
 
     # --- second photo after the drop ------------------------------------------
 

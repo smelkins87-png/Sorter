@@ -152,13 +152,20 @@ Open **`http://magic-sorter-INSER.local:8766`** (or the Pi's IP address, port 87
 1. **The sorter pauses.** The Logging page says how many cards are waiting and links to this review page.
 2. **You review** them here, then press **Resume** on the touchscreen. Press **Stop** to finish without re-sorting.
 3. **The machine sorts them again.** It measures the bin like a feeder, pulls the cards back out from the top, and sorts each one with your verdict. Pile order says which reviewed scan each card is, and a photo comparison confirms it.
-4. **Cards still unresolved** go to the other bin for unrecognised cards, and the next pause offers another round.
+4. **Cards still unresolved** (not a card, or not reviewed and still not recognised) go to the other bin for unrecognised cards and stay there for you: each card is offered for review once per run. New unrecognised cards from more feeding get their own round.
+
+Pressing **Stop** halfway is fine: the cards still in the bin stay in the results file, and the next run starts clean.
+**Resume, empty Not Found** on the touchscreen means you took the bin's cards out yourself, so there's nothing to pull.
+Re-sorted cards show a "re-sorted" tag here and count once in the collection, under the scan you reviewed.
+Your verdicts win over the second photo (verifydrop): it only moves a re-sorted card if the pile shows a different card altogether.
+Not used with title, set or team sorting, which swap feeders and piles between passes.
 
 While the sorter waits for you, and while it re-sorts, a banner at the top of this page says so (and how many cards are left).
 
 Two identical-looking copies reviewed as different printings can't be told apart from a photo if the pile was disturbed. They go back to the manual check rather than being guessed.
 It needs two bins for unrecognised cards: one is emptied while the other catches what still can't be sorted.
 
+Open it by the sorter's name or IP address: other names are refused, so a web page elsewhere can't reach it through your browser.
 The page works offline. It uses no web fonts or online card images, so reviewing tells nobody what's in your collection.
 To add a password, set `"review_password"` in `/etc/localsorter.json` (any user name works) and run `sudo systemctl restart localsorter`.
 To turn the page off, set `"review_port": 0`.

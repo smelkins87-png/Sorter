@@ -147,6 +147,33 @@ def test_sorter_status_for_the_banner(env):
     assert env.app.sorter_status()["waiting_review"] is None
 
 
+def test_last_not_found_is_the_servers_scan_id(env):
+    status, answer = env.app.identify(synthetic.photo(synthetic.make_card(99), seed=1), {})
+    assert status == 404 and env.app.last_not_found == answer["uuid"]
+
+
+def test_unreadable_photo_is_skipped(env):
+    env.scan("u1", 1, 1, "corrected", env.reprint)
+    with open(os.path.join(env.app.settings.export_dir, DAY, "images", "bad.jpg"), "wb") as handle:
+        handle.write(b"not a jpeg")
+    env.app.resort_start(["bad", "u1"])
+    assert env.app.resort.queue == ["u1"]
+
+
+def test_look_alikes_after_the_pile_was_disturbed(env):
+    # Card 3 comes out before card 2 (pile disturbed). Later, the copy of
+    # card 1 on top can't be told from its look-alike with another verdict
+    env.scan("a", 1, 1, "confirmed", "card-0001-tst")
+    env.scan("b", 1, 2, "corrected", env.reprint)
+    env.scan("two", 2, 2, "confirmed", "card-0002-tst")
+    env.scan("three", 3, 3, "confirmed", "card-0003-tst")
+    env.app.resort_start(["two", "three", "a", "b"])
+
+    assert env.pull(3, 3)[1]["result"]["title"] == "Card 3"
+    assert env.pull(2, 2)[1]["result"]["title"] == "Card 2"
+    assert env.pull(1, 1)[0] == 404
+
+
 def test_scans_without_a_photo_are_skipped(env):
     env.app.resort_start(["never-saved"])
     assert env.app.resort.queue == []
@@ -194,6 +221,7 @@ class Robot(object):
         self._pause = False
         self._running = True
         self.global_pause = threading.Event()
+        self._game_details = types.SimpleNamespace(get_card_height=lambda: 0.25)
 
     def pause(self):
         self._pause = True
@@ -221,14 +249,30 @@ def plugin(monkeypatch, tmp_path):
 
     instance = module.Localsorter({"endpoint": "http://127.0.0.1:8765"})
     instance.posted = []
-    instance._post = lambda path, data: instance.posted.append((path, data)) or {"result": "ok"}
+    instance._post = lambda path, data, timeout=60: instance.posted.append((path, data)) or {"result": "ok"}
     instance.module = module
 
     return instance
 
 
-def _resume_after(robot, seconds=0.2):
-    threading.Timer(seconds, lambda: setattr(robot, "_pause", False)).start()
+def _resume_after(robot, seconds=0.2, then=None):
+    def resume():
+        if then:
+            then()
+        robot._pause = False
+
+    threading.Timer(seconds, resume).start()
+
+
+def _pull(plugin, robot, bin_, destination, uuid="new", reviewed=None):
+    """The robot taking a card off the bin: the matcher files its record
+    on the destination, then the card is dropped there."""
+    assert plugin.onRobotGetNextFeeder(robot) is bin_
+    record = {"uuid": uuid, "title": "x"}
+    if reviewed:
+        record["confidence"] = {"printing": {"method": "review", "reviewed_scan": reviewed}}
+    destination.cards.append(record)
+    plugin.onRobotReleaseCard(robot, bin_, destination)
 
 
 def test_waits_while_feeders_have_cards(plugin):
@@ -251,19 +295,20 @@ def test_pauses_for_review_then_pulls_the_bin(plugin):
     assert any("Review them at http://" in str(m) for m in plugin.logged)
 
     # The review page's banner was told, then the top of the pile first;
-    # measured like a feeder; never a destination meanwhile
+    # measured like a feeder; disabled, so never a destination meanwhile
     assert plugin.posted == [("/resort/waiting", {"cards": 3, "position": 5}),
                              ("/resort/start", {"uuids": ["u5-2", "u5-1", "u5-0"]})]
-    assert robot._plate.probed == [5] and bin_.isFeeder
+    assert robot._plate.probed == [5] and not bin_.enabled and not bin_.isFeeder
 
-    for _ in range(3):
-        assert plugin.onRobotGetNextFeeder(robot) is bin_
-        plugin.onRobotReleaseCard(robot, bin_, other)
+    for n in range(3):
+        _pull(plugin, robot, bin_, other, uuid="new%d" % n)
+        assert len(bin_.cards) == 2 - n          # records leave with their cards
 
     # Empty: back to a normal bin, server told, sorter takes over again
     assert plugin.onRobotGetNextFeeder(robot) is None
     assert plugin.posted[-1] == ("/resort/stop", {})
-    assert not bin_.isFeeder and bin_.cards == [] and bin_.height == 0
+    assert bin_.enabled and bin_.cards == [] and bin_.height == 0
+    assert [c["uuid"] for c in other.cards] == ["new0", "new1", "new2"]
 
 
 def test_stop_while_waiting_for_review(plugin):
@@ -279,7 +324,7 @@ def test_stop_while_waiting_for_review(plugin):
 
 
 def test_banner_is_best_effort(plugin):
-    def post(path, data):
+    def post(path, data, timeout=60):
         if path == "/resort/waiting":
             raise IOError("server busy")
         return {"result": "ok"}
@@ -297,12 +342,106 @@ def test_stop_halfway_keeps_the_cards_still_in_the_bin(plugin):
     other = Position(6, fixed=True)
     robot = Robot(Plate([bin_, other]))
     _resume_after(robot)
-    plugin.onRobotGetNextFeeder(robot)
-    plugin.onRobotReleaseCard(robot, bin_, other)          # one pulled
+    _pull(plugin, robot, bin_, other)                      # one pulled
 
+    # Stop: the robot never asks for another feeder. The results file is
+    # written now, so the bin must hold the right records already; disabled
+    # positions are still exported (feeders aren't)
     robot._running = False
-    assert plugin.onRobotGetNextFeeder(robot) is None
     assert [c["uuid"] for c in bin_.cards] == ["u5-0", "u5-1"]   # the bottom two remain
+    assert not bin_.isFeeder
+
+    # The next run starts clean, and so does the server
+    plugin.onRobotBeforeRun(Robot(Plate([])))
+    assert plugin._resort is None and plugin.posted[-1] == ("/resort/stop", {})
+
+
+def test_a_disturbed_pile_takes_the_right_record_out(plugin):
+    bin_ = Position(5, fixed=True, cards=3)
+    other = Position(6, fixed=True)
+    robot = Robot(Plate([bin_, other]))
+    _resume_after(robot)
+    _pull(plugin, robot, bin_, other, reviewed="u5-0")      # the bottom card came out first
+
+    assert [c["uuid"] for c in bin_.cards] == ["u5-1", "u5-2"]
+
+
+def test_a_refused_card_ends_the_resort(plugin):
+    # mess detector / stop token: the sorter disables the "feeder" and
+    # releases nothing, so pulling would go on forever
+    bin_ = Position(5, fixed=True, cards=3)
+    robot = Robot(Plate([bin_, Position(6, fixed=True)]))
+    _resume_after(robot)
+    assert plugin.onRobotGetNextFeeder(robot) is bin_
+
+    plugin.onRobotStopToken(robot, bin_)
+    assert plugin._resort is None and bin_.enabled and len(bin_.cards) == 3
+    assert plugin.posted[-1] == ("/resort/stop", {})
+
+    # Those cards were offered once: no new pause for them
+    assert plugin.onRobotGetNextFeeder(robot) is None and not robot._pause
+
+
+def test_resume_with_empty_not_found_while_waiting(plugin):
+    bin_ = Position(5, fixed=True, cards=2)
+    robot = Robot(Plate([bin_, Position(6, fixed=True)]))
+
+    def empty():                       # Plate.empty_notfound
+        bin_.cards, bin_.height, bin_.processed = [], 0, 0
+
+    _resume_after(robot, then=empty)
+    assert plugin.onRobotGetNextFeeder(robot) is None
+    assert not any(path == "/resort/start" for path, _ in plugin.posted)
+
+
+def test_empty_not_found_during_the_resort_ends_it(plugin):
+    bin_ = Position(5, fixed=True, cards=3)
+    other = Position(6, fixed=True)
+    robot = Robot(Plate([bin_, other]))
+    _resume_after(robot)
+    _pull(plugin, robot, bin_, other)
+
+    bin_.cards, bin_.enabled = [], True        # Plate.empty_notfound on a later Resume
+    assert plugin.onRobotGetNextFeeder(robot) is None
+    assert plugin._resort is None and bin_.cards == []
+
+
+def test_one_round_per_batch(plugin):
+    bin_ = Position(5, fixed=True, cards=2)
+    other = Position(6, fixed=True)
+    robot = Robot(Plate([bin_, other]))
+    _resume_after(robot)
+    for n in range(2):
+        _pull(plugin, robot, bin_, other, uuid="again%d" % n)   # still unresolved: the other bin
+    assert plugin.onRobotGetNextFeeder(robot) is None
+
+    # Unresolved cards stay for a manual check; new cards get their own round
+    assert plugin.onRobotGetNextFeeder(robot) is None and not robot._pause
+    other.cards.append({"uuid": "fresh", "title": ""})
+    _resume_after(robot)
+    assert plugin.onRobotGetNextFeeder(robot) is other
+
+
+def test_layer_sorting_is_left_alone(plugin, monkeypatch):
+    matcher = types.ModuleType("lib.matcher.matcher")
+    matcher.Matcher = types.SimpleNamespace(layer_ordering=True)
+    monkeypatch.setitem(sys.modules, "lib.matcher", types.ModuleType("lib.matcher"))
+    monkeypatch.setitem(sys.modules, "lib.matcher.matcher", matcher)
+    robot = Robot(Plate([Position(5, fixed=True, cards=2), Position(6, fixed=True)]))
+
+    assert plugin.onRobotGetNextFeeder(robot) is None and not robot._pause
+
+
+def test_not_found_cards_get_the_servers_scan_id(plugin):
+    plugin._get = lambda path: {"uuid": "server-uuid"} if path == "/last-not-found" else {}
+    card = {"uuid": "vendor-uuid", "confidence": {}}
+    plugin.onCameraCardNotFound({}, card, None)
+    assert card["uuid"] == "server-uuid"
+
+    plugin._get = lambda path: (_ for _ in ()).throw(IOError("down"))
+    card = {"uuid": "vendor-uuid"}
+    plugin.onCameraCardNotFound({}, card, None)
+    assert card["uuid"] == "vendor-uuid"
 
 
 def test_needs_a_second_bin(plugin):

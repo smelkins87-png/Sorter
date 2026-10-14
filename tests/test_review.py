@@ -205,3 +205,63 @@ def test_sorter_status_feeds_the_banner(env):
 
     env.review.status = lambda: {"waiting_review": {"cards": 4, "position": 5, "since": "12:00"}, "resorting": None}
     assert json.loads(get(env, "/api/status")[2])["waiting_review"]["cards"] == 4
+
+
+def test_resorted_cards_are_not_counted_twice(env):
+    post_label(env, day=DAY, uuid="aaaa1111", status="corrected", card_id=env.reprint)
+
+    # The same card pulled back out of the bin and sorted with that verdict
+    class Reviewed(object):
+        distance = margin = ""
+        set_detected = True
+        printing = {"method": "review", "reviewed_scan": "aaaa1111"}
+
+    row = env.conn.execute("SELECT * FROM cards WHERE id = ?", (env.reprint,)).fetchone()
+    Exporter(env.settings.export_dir).record("dddd4444", synthetic.photo(synthetic.make_card(1), seed=2),
+                                             carddb.to_api_card(row), Reviewed())
+
+    scans = json.loads(get(env, "/api/scans?day=" + DAY)[2])["scans"]
+    assert [s["resorted"] for s in scans if s["uuid"] == "dddd4444"] == [True]
+
+    rows = list(csv.DictReader(get(env, "/api/export?day=" + DAY)[2].decode("utf-8-sig").splitlines()))
+    assert [(r["title"], r["set"], r["scan"]) for r in rows] == [("Card 1", "REP", "aaaa1111"),
+                                                                 ("Card 2", "TST", "bbbb2222")]
+
+
+def _request(env, path, data=None, headers=None):
+    request = urllib.request.Request("http://127.0.0.1:%d%s" % (env.port, path), data=data, headers=headers or {})
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
+def test_other_sites_cant_use_the_page(env):
+    label = json.dumps({"day": DAY, "uuid": "aaaa1111", "status": "confirmed",
+                        "card_id": "card-0001-tst"}).encode()
+
+    # DNS rebinding: a name that isn't the sorter's
+    assert _request(env, "/api/days", headers={"Host": "evil.example:8766"}) == 403
+    assert _request(env, "/api/days", headers={"Host": "localhost:8766"}) == 200
+
+    # Cross-site writes: a form post, or another site's page
+    assert _request(env, "/api/label", label, {"Content-Type": "text/plain"}) == 415
+    assert _request(env, "/api/label", label, {"Content-Type": "application/json",
+                                               "Origin": "http://evil.example"}) == 403
+    assert _request(env, "/api/label", label, {"Content-Type": "application/json",
+                                               "Origin": "http://127.0.0.1:%d" % env.port}) == 200
+
+
+def test_day_list_is_cached_until_something_changes(env, monkeypatch):
+    env.review.days()
+    calls = []
+    original = env.review.scans
+    monkeypatch.setattr(env.review, "scans", lambda day: calls.append(day) or original(day))
+
+    env.review.days()
+    assert calls == []
+
+    post_label(env, day=DAY, uuid="aaaa1111", status="confirmed", card_id="card-0001-tst")
+    calls.clear()
+    assert env.review.days()[0]["needs_check"] == 1 and calls == [DAY]

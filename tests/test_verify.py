@@ -74,6 +74,19 @@ def test_two_confident_printings_disagree(app):
     assert answer["result"] == "printing_differs"
 
 
+def test_printing_chosen_on_the_review_page_is_not_overruled(app):
+    app, images = app
+    expected = _expected("Card 1", "2ED")
+    expected["confidence"] = {"printing": {"method": "review", "reviewed_scan": "u0"}}
+    status, answer = app.verify(_photo(images, "print-LEB"), expected)
+
+    assert answer["result"] == "match"
+
+    # A different card on the pile still counts
+    status, answer = app.verify(_photo(images, "card-0005-tst"), expected)
+    assert answer["result"] == "mismatch"
+
+
 def test_unrecognised_pile_and_unrecognised_card(app):
     app, images = app
     blank = synthetic.photo(synthetic.make_card(9999), seed=1, background=MID, **BIG)

@@ -19,7 +19,9 @@ import json
 import logging
 import mimetypes
 import os
+import ipaddress
 import re
+import socket
 import threading
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,6 +52,41 @@ CREATE INDEX IF NOT EXISTS labels_day ON labels (day);
 """
 
 
+def _stamp(path):
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+
+    return info.st_mtime_ns, info.st_size
+
+
+def _host_name(netloc):
+    """Host header (or URL netloc) without the port, lower case."""
+    netloc = netloc.strip().lower()
+
+    if netloc.startswith("["):
+        return netloc[1:].partition("]")[0]
+
+    return netloc.rpartition(":")[0] if netloc.count(":") == 1 else netloc
+
+
+def _local_name(host):
+    """An IP address, localhost or this machine's own name (any domain after it)."""
+    if not host:
+        return False
+
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+
+    me = socket.gethostname().lower()
+
+    return host == "localhost" or host == me or host.startswith(me + ".")
+
+
 def _read_csv(path):
     if not os.path.exists(path):
         return []
@@ -65,6 +102,10 @@ class Review:
         self.db_lock = db_lock
         # Callable giving the sorter's state (paused for review, re-sorting)
         self.status = status or (lambda: {"waiting_review": None, "resorting": None})
+        self._csv_lock = threading.Lock()
+        # Per-day counts for the day list, until the day's files or labels change
+        self._days_cache = {}
+        self._labels_version = 0
 
         with self.db_lock, self.conn:
             self.conn.executescript(LABELS_SCHEMA)
@@ -86,9 +127,17 @@ class Review:
         result = []
 
         for day in entries:
-            scans = self.scans(day)
-            result.append({"day": day, "scans": len(scans),
-                           "needs_check": sum(1 for s in scans if s["needs_check"] and not s["label"])})
+            key = (self._labels_version,) + tuple(_stamp(os.path.join(self.settings.export_dir, day, name))
+                                                  for name in ("scans.csv", "verify.csv"))
+            cached = self._days_cache.get(day)
+
+            if cached is None or cached[0] != key:
+                scans = self.scans(day)
+                cached = (key, {"day": day, "scans": len(scans),
+                                "needs_check": sum(1 for s in scans if s["needs_check"] and not s["label"])})
+                self._days_cache[day] = cached
+
+            result.append(cached[1])
 
         return result
 
@@ -150,6 +199,8 @@ class Review:
                 "border": row.get("border"),
                 "scryfall_id": row.get("scryfall_id"),
                 "method": row.get("printing_method"),
+                # Pulled back out of the manual-check bin and sorted with a review's verdict
+                "resorted": row.get("printing_method") == "review",
                 "has_image": bool(row.get("image")),
                 "drop_check": check.get("result") if check else None,
                 "drop_seen": ("%s (%s #%s)" % (check["seen_title"], check["seen_set"], check["seen_number"])
@@ -161,8 +212,8 @@ class Review:
 
         return result
 
-    def stats(self, day):
-        scans = self.scans(day)
+    def stats(self, day, scans=None):
+        scans = self.scans(day) if scans is None else scans
         found = [s for s in scans if s["status"] == "found"]
         labelled = [s for s in scans if s["label"]]
         value = 0.0
@@ -268,10 +319,15 @@ class Review:
                     "updated_at=excluded.updated_at",
                     (uuid, day, card_id, status, datetime.now().isoformat(timespec="seconds")))
 
+        self._labels_version += 1
         self._write_labels_csv(day)
 
     def _write_labels_csv(self, day):
         """<day>/labels.csv: what `localsorter eval` reads."""
+        with self._csv_lock:
+            self._write_labels_csv_locked(day)
+
+    def _write_labels_csv_locked(self, day):
         scans = {s["uuid"]: s for s in self.scans(day)}
         labels = self._labels(day)
         cards = self._cards([l["card_id"] for l in labels.values()])
@@ -299,6 +355,10 @@ class Review:
 
         for s in scans:
             label = s["label"]
+
+            # The card's reviewed scan already counts it
+            if s.get("resorted"):
+                continue
 
             if label and label["status"] == "not_a_card":
                 continue
@@ -337,7 +397,33 @@ class ReviewHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.debug("review %s - %s", self.address_string(), fmt % args)
 
+    def _same_site(self):
+        """Refuses requests a web page from elsewhere could make through the
+        visitor's browser: a Host that isn't this machine (DNS rebinding)
+        and cross-site writes."""
+        host = _host_name(self.headers.get("Host", ""))
+
+        if not _local_name(host):
+            self._send(403, {"error": "Use the sorter's name or IP address"})
+            return False
+
+        if self.command == "POST":
+            origin = self.headers.get("Origin")
+            if origin and _host_name(urlparse(origin).netloc) != host:
+                self._send(403, {"error": "Cross-site request"})
+                return False
+
+            # A form can't send JSON: browsers have to ask first, and we never agree
+            if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":
+                self._send(415, {"error": "Expected application/json"})
+                return False
+
+        return True
+
     def _authorised(self):
+        if not self._same_site():
+            return False
+
         if not self.password:
             return True
 
@@ -389,7 +475,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if parts == ["api", "days"]:
                 return self._send(200, review.days())
             if parts == ["api", "scans"]:
-                return self._send(200, {"scans": review.scans(params.get("day")), "stats": review.stats(params.get("day"))})
+                scans = review.scans(params.get("day"))
+                return self._send(200, {"scans": scans, "stats": review.stats(params.get("day"), scans)})
             if parts == ["api", "printings"]:
                 return self._send(200, review.printings(params.get("card_id")))
             if parts == ["api", "search"]:

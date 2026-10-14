@@ -9,7 +9,9 @@ the verdict given on the review page instead of a new guess.
 Pile order is the primary key: the card on top was dropped last. The photo
 check confirms it, and if the pile was disturbed the photo picks among all
 remaining scans. Two look-alike copies with different verdicts can't be
-told apart that way: such a card goes back to the manual check.
+told apart that way: such a card goes back to the manual check. Once the
+pile has been seen out of order, pile order no longer settles look-alikes
+either.
 """
 import glob
 import logging
@@ -54,6 +56,8 @@ class ResortSession:
         self._lock = threading.Lock()
         self.queue = []
         self.candidates = {}
+        # False once a card came out that wasn't the one on top
+        self.in_order = True
 
         with db_lock:
             labels = {r["uuid"]: dict(r) for r in conn.execute(
@@ -67,8 +71,12 @@ class ResortSession:
                 log.info("Re-sort: no photo kept for scan %s, it will be identified afresh", uuid)
                 continue
 
-            with open(path, "rb") as handle:
-                hashes = _hashes(imagehash.locate(handle.read()))
+            try:
+                with open(path, "rb") as handle:
+                    hashes = _hashes(imagehash.locate(handle.read()))
+            except Exception as error:      # unreadable photo: identify that card afresh
+                log.warning("Re-sort: can't use the photo of scan %s (%s)", uuid, error)
+                continue
 
             self.queue.append(uuid)
             self.candidates[uuid] = {"hashes": hashes, "label": labels.get(uuid)}
@@ -105,19 +113,27 @@ class ResortSession:
             expected = self.queue[0]
             chosen = None
 
-            # 1. The pile's order says it's the scan on top
-            if _distance(hashes, self.candidates[expected]["hashes"]) <= SAME_CARD:
+            ranked = sorted((_distance(hashes, self.candidates[u]["hashes"]), u) for u in self.queue)
+            distances = dict((u, d) for d, u in ranked)
+
+            # 1. The pile's order says it's the scan on top (trusted while
+            #    the pile has come out in order)
+            if self.in_order and distances[expected] <= SAME_CARD:
                 chosen = expected
             else:
                 # 2. Pile disturbed: the closest of the remaining scans
-                ranked = sorted((_distance(hashes, self.candidates[u]["hashes"]), u) for u in self.queue)
                 best_distance, best = ranked[0]
 
                 if best_distance > SAME_CARD:
                     return "unknown", None
 
+                if best != expected:
+                    self.in_order = False
+
                 verdict = self._verdict(best)
-                for distance, other in ranked[1:]:
+                for distance, other in ranked:
+                    if other == best:
+                        continue
                     if distance - best_distance >= AMBIGUOUS:
                         break
                     if self._verdict(other) != verdict:
