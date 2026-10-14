@@ -67,21 +67,26 @@ chown localsorter:pi /home/pi/public/scans
 chmod 2775 /home/pi/public/scans
 echo "/var/lib/localsorter (localsorter) and /home/pi/public/scans (localsorter:pi, 2775) ready"
 
-step "Installing the verifydrop plugin (second photo after each drop)"
-PLUGIN_DIR=/home/pi/magic-sorter/magicsorter/plugins/verifydrop
-if [[ -d /home/pi/magic-sorter/magicsorter/plugins ]]; then
+step "Installing the sorter plugins (second photo after each drop)"
+PLUGINS=/home/pi/magic-sorter/magicsorter/plugins
+if [[ -d $PLUGINS ]]; then
+    # "localsorter" does the work and must always load (plugins load once, at
+    # start); "verifydrop" is only the touchscreen on/off switch
+    mkdir -p "$PLUGINS/localsorter"
+    install -o pi -g pi -m 0644 plugin/localsorter/__init__.py plugin/localsorter/localsorter.py "$PLUGINS/localsorter/"
+    rm -f "$PLUGINS/localsorter/disabled.txt"
+
     first_install=0
-    [[ -d $PLUGIN_DIR ]] || first_install=1
-    mkdir -p "$PLUGIN_DIR"
-    install -o pi -g pi -m 0644 plugin/verifydrop/__init__.py plugin/verifydrop/verifydrop.py "$PLUGIN_DIR/"
+    [[ -d $PLUGINS/verifydrop ]] || first_install=1
+    mkdir -p "$PLUGINS/verifydrop"
+    install -o pi -g pi -m 0644 plugin/verifydrop/__init__.py plugin/verifydrop/verifydrop.py "$PLUGINS/verifydrop/"
     # Off until switched on from the touchscreen (System settings > Available plugins)
     if [[ $first_install -eq 1 ]]; then
-        sudo -u pi touch "$PLUGIN_DIR/disabled.txt"
+        sudo -u pi touch "$PLUGINS/verifydrop/disabled.txt"
     fi
-    chown -R pi:pi "$PLUGIN_DIR"
-    # Plugins load when the sorter software starts
+    chown -R pi:pi "$PLUGINS/localsorter" "$PLUGINS/verifydrop"
     systemctl try-restart magicsorter_py.service || true
-    echo "Installed in $PLUGIN_DIR ($( [[ -f $PLUGIN_DIR/disabled.txt ]] && echo switched off || echo switched on ))"
+    echo "Second photo after each drop: $( [[ -f $PLUGINS/verifydrop/disabled.txt ]] && echo switched off || echo switched on )"
 else
     echo "Sorter plugins folder not found; skipping"
 fi

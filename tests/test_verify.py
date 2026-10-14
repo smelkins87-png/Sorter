@@ -21,7 +21,7 @@ from localsorter.settings import Settings
 from . import synthetic
 from .test_border import BIG, MID, world  # noqa: F401  (shared fixture)
 
-PLUGIN = os.path.join(os.path.dirname(__file__), "..", "plugin", "verifydrop", "verifydrop.py")
+PLUGIN = os.path.join(os.path.dirname(__file__), "..", "plugin", "localsorter", "localsorter.py")
 
 
 # --- /verify ----------------------------------------------------------------
@@ -166,13 +166,27 @@ class FakeMovements(object):
         self.released.append(destination.index)
 
 
+class PlateFullException(Exception):
+    pass
+
+
 class FakeRobot(object):
     def __init__(self, bin_position, fail=False):
         self._frame = FakeFrame()
         self._movements = FakeMovements(fail)
         self.global_pause = threading.Event()
-        self.matcher = types.SimpleNamespace(_handleResult=lambda attribs, found: bin_position)
+        self.paused = False
         self._game_details = types.SimpleNamespace(get_card_height=lambda: 0.30)
+
+        def handle(attribs, found):
+            if bin_position == "full":
+                raise PlateFullException("plate full")
+            return bin_position
+
+        self.matcher = types.SimpleNamespace(_handleResult=handle)
+
+    def pause(self):
+        self.paused = True
 
 
 class FakeCamera(object):
@@ -197,7 +211,9 @@ def plugin_module(monkeypatch, tmp_path):
         "lib.utils.pluginbase": types.SimpleNamespace(PluginBase=PluginBase),
         "lib.matcher": types.ModuleType("lib.matcher"),
         "lib.matcher.card_attributes": types.SimpleNamespace(
-            CardAttributes=types.SimpleNamespace(from_camera_card=lambda card: ({"title": ""}, False))),
+            CardAttributes=types.SimpleNamespace(
+                from_camera_card=lambda card: ({"title": card.get("title", ""), "set": card.get("set", "")},
+                                               bool(card.get("title"))))),
     }
     for name, module in stubs.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -205,14 +221,15 @@ def plugin_module(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("verifydrop_under_test", PLUGIN)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.HERE = str(tmp_path)          # where disabled.txt is looked for
+    module.SWITCH_DIR = str(tmp_path)    # the "verifydrop" switch folder
 
     return module
 
 
-def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765", fail=False, x=100.0):
+def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765", fail=False, x=100.0,
+           bin_position=None, pile_set=None):
     config = {"endpoint": endpoint, "card_offset": offsets or {"x": 4, "y": 2}}
-    plugin = plugin_module.Verifydrop(config)
+    plugin = plugin_module.Localsorter(config)
     plugin.onCameraPicTaken({"game": "mtg"}, types.SimpleNamespace(
         _camera=FakeCamera(),
         _camera_decorator=types.SimpleNamespace(processCardImage=lambda stream, pos: Image.open(stream))), None)
@@ -220,11 +237,16 @@ def _setup(plugin_module, answer, offsets=None, endpoint="http://127.0.0.1:8765"
     plugin._ask = lambda photo, expected: asked.append(expected) or answer
 
     destination = FakePosition(3, x, 50.0, height=12.0)
+    # The pile's sorting rule: by set when pile_set is given, else anything
+    destination.match = lambda attribs, allowFixed=True, cardFound=False: (
+        pile_set is None or attribs.get("set") == pile_set)
     destination.processed = 5
     record = {"uuid": "u1", "title": "Card 1", "set": "LEB", "num": "1", "confidence": {"set_detected": True}}
     destination.cards = [{"title": "Older"}, record]
-    bin_position = FakePosition(9, 300.0, 50.0)
-    robot = FakeRobot(bin_position, fail)
+    bin_position = bin_position or FakePosition(9, 300.0, 50.0)
+    robot = FakeRobot(destination if bin_position == "same" else bin_position, fail)
+    if bin_position == "same":
+        bin_position = destination
 
     plugin.onRobotReleaseCard(robot, FakePosition(0, 0, 0), destination)
 
@@ -275,7 +297,8 @@ def test_differing_printings_also_go_to_the_manual_bin(plugin_module):
 def test_mismatch_can_pause_instead(plugin_module):
     robot, destination, *_ = _setup(plugin_module, {"result": "mismatch", "action": "pause"})
 
-    assert robot.global_pause.is_set()
+    # Both: the robot's own flag stops it before the next card
+    assert robot.global_pause.is_set() and robot.paused
     assert robot._movements.grabbed == [] and len(destination.cards) == 2
 
 
@@ -301,10 +324,49 @@ def test_refined_updates_the_record(plugin_module):
     assert robot._movements.grabbed == []
 
 
+def test_refined_to_a_printing_that_belongs_elsewhere_goes_to_the_manual_bin(plugin_module):
+    # Sorting by set: the pile is for LEB, the second photo says it's 2ED
+    answer = {"result": "refined", "action": "manual_bin", "card": {"set": "2ED", "num": "1"}}
+    robot, destination, bin_position, record, _ = _setup(plugin_module, answer, pile_set="LEB")
+
+    assert robot._movements.released == [9]
+    moved = bin_position.cards[-1]
+    assert moved["set"] == "2ED"
+    assert moved["confidence"]["manual_check"]["reason"] == "refined_other_pile"
+
+
+def test_refined_that_still_fits_the_pile_stays(plugin_module):
+    answer = {"result": "refined", "action": "manual_bin", "card": {"set": "LEB", "num": "1"}}
+    robot, destination, *_ = _setup(plugin_module, answer, pile_set="LEB")
+
+    assert robot._movements.grabbed == []
+
+
+def test_full_plate_pauses(plugin_module):
+    robot, destination, _, record, _ = _setup(
+        plugin_module, {"result": "mismatch", "action": "manual_bin"}, bin_position="full")
+
+    assert robot.paused and robot._movements.grabbed == []
+    assert destination.cards[-1] is record
+
+
+def test_card_already_in_the_manual_pile_stays_without_pausing(plugin_module):
+    robot, *_ = _setup(plugin_module, {"result": "mismatch", "action": "manual_bin"}, bin_position="same")
+
+    assert not robot.paused and robot._movements.grabbed == []
+
+
 def test_unreadable_second_photo_is_not_a_mismatch(plugin_module):
     robot, *_ = _setup(plugin_module, {"result": "unreadable", "action": "manual_bin"})
 
     assert robot._movements.grabbed == [] and not robot.global_pause.is_set()
+
+
+def test_switch_folder_missing_means_off(plugin_module, tmp_path):
+    plugin_module.SWITCH_DIR = str(tmp_path / "not-installed")
+    robot, *_, asked = _setup(plugin_module, {"result": "match"})
+
+    assert robot._frame.moves == [] and asked == []
 
 
 def test_switched_off_with_disabled_txt(plugin_module, tmp_path):

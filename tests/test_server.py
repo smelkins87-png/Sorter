@@ -401,3 +401,13 @@ def test_sendlog_keeps_logs_locally(env):
 
     saved = list((env.tmp_path / "scans" / "logs").glob("sorter-logs_*.zip"))
     assert len(saved) == 1 and saved[0].read_bytes() == b"PK-fake-zip"
+
+
+def test_negative_content_length_is_rejected(env):
+    import http.client
+
+    conn = http.client.HTTPConnection("127.0.0.1", env.port, timeout=5)
+    conn.putrequest("POST", "/user/preferences")
+    conn.putheader("Content-Length", "-1")
+    conn.endheaders()
+    assert conn.getresponse().status == 400

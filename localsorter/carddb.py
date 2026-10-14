@@ -329,7 +329,10 @@ def to_api_card(row, foil=0, condition="NM", lang="en", currency="usd"):
         "set_name": row["set_name"] or "",
         "num": row["collector_number"] or "",
         "rarity": row["rarity"] or "",
-        "lang": row["lang"] or lang,
+        # The sorter's language setting wins over the database default
+        # ("en" for nearly every printing); a language read off the card
+        # overrides both, in the server
+        "lang": lang if lang not in (None, "", "auto") else (row["lang"] or "en"),
         "foil": int(foil or 0),
         "condition": condition,
         "price": round(price, 2) if price is not None else 0.0,

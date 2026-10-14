@@ -7,11 +7,12 @@
 Resumable and incremental: only faces without data (new cards, or a previous
 run interrupted) are fetched. Images are processed in memory and discarded.
 """
+import itertools
 import json
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from . import imagehash, printing, scryfall
 
@@ -81,16 +82,26 @@ def _run(conn, todo, process, insert_sql, workers, delay, fetch, progress):
             conn.executemany(insert_sql, batch)
         batch.clear()
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(work, item) for item in todo]
+    # Only a few jobs in flight at a time: finished futures hold their
+    # results, and 79k close-ups at once would not fit in a Pi's memory
+    pending = iter(todo)
+    window = max(1, workers) * 4
 
-        for future in as_completed(futures):
-            try:
-                batch.append(future.result())
-                done += 1
-            except Exception as error:  # keep going; the next run retries it
-                failed += 1
-                log.warning("Could not process image: %s", error)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        running = {pool.submit(work, item) for item in itertools.islice(pending, window)}
+
+        while running:
+            finished, running = wait(running, return_when=FIRST_COMPLETED)
+
+            for future in finished:
+                try:
+                    batch.append(future.result())
+                    done += 1
+                except Exception as error:  # keep going; the next run retries it
+                    failed += 1
+                    log.warning("Could not process image: %s", error)
+
+            running |= {pool.submit(work, item) for item in itertools.islice(pending, len(finished))}
 
             if len(batch) >= 500:
                 flush()

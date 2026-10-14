@@ -12,6 +12,10 @@
 #   sudo bash deploy/lockdown.sh --check   show what is blocked and what got through
 #   sudo bash deploy/lockdown.sh --undo    restore the vendor setup
 #
+# SSH, VNC and Samba from the local network keep working. Remote-access
+# services that go through the internet (Tailscale, Raspberry Pi Connect,
+# RealVNC cloud) are blocked by the firewall; use --no-firewall if you need one.
+#
 # Safe to re-run. Run deploy/install.sh first.
 set -euo pipefail
 
@@ -65,7 +69,7 @@ for arg in "$@"; do
         --allow-os-updates) ALLOW_OS_UPDATES=1 ;;
         --undo) MODE=undo ;;
         --check) MODE=check ;;
-        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
         *) die "unknown option: $arg (see --help)" ;;
     esac
 done
@@ -239,7 +243,9 @@ check() {
         echo "Firewall:          NOT active"
     fi
     for unit in "${OS_UPDATE_UNITS[@]}"; do
-        printf "%-19s%s\n" "$unit:" "$(systemctl is-enabled "$unit" 2>/dev/null || echo absent)"
+        # is-enabled prints "masked" *and* fails for masked units
+        state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+        printf "%-19s%s\n" "$unit:" "${state:-absent}"
     done
     echo
     echo "Blocked outgoing attempts in the last 24 h (destination, count):"

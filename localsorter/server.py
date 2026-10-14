@@ -147,8 +147,8 @@ class App:
             row = self.card_row(card_id)
 
             if row is not None:
-                card = carddb.to_api_card(row, foil=foil, condition=condition,
-                                          lang=lang if lang != "auto" else "en", currency=s.price_currency)
+                card = carddb.to_api_card(row, foil=foil, condition=condition, lang=lang,
+                                          currency=s.price_currency)
                 # What the card itself says beats the sorter's language setting
                 if detected_lang:
                     card["lang"] = detected_lang
@@ -187,7 +187,7 @@ class App:
           refined     same card; the first photo couldn't confirm the printing,
                       this one does: `card` holds the corrected fields
           printing_differs  same card, both photos confident about different
-                      printings (logged, never pauses)
+                      printings (handled like a mismatch by the plugin)
           mismatch    a different card is on top: missed drop, wrong pile...
           unreadable  nothing recognised on the pile
           skipped     the dropped card itself wasn't recognised
@@ -366,6 +366,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         length = int(self.headers.get("Content-Length") or 0)
+
+        if length < 0:
+            raise ValueError("Invalid Content-Length")
 
         if length > MAX_UPLOAD:
             raise ValueError("Upload too large")

@@ -278,3 +278,9 @@ def test_missing_tesseract_binary_disables_ocr():
 
     assert ocr.read_bottom(located, tesseract) == ""
     assert tesseract.read(Image.new("L", (40, 20), 255)) == ""
+
+
+def test_words_never_count_as_collector_numbers():
+    # "IS" folds to "15" and "SO" to "50"; only tokens with a real digit can be numbers
+    scores = ocr.score_candidates("THIS IS SO GOOD", [row("a", "XYZ", "15"), row("b", "XYZ", "50")])
+    assert scores["a"][0] == 0 and scores["b"][0] == 0

@@ -442,3 +442,9 @@ def test_to_api_card_price_zero_when_no_price():
 
     assert api["price"] == 0.0
     assert api["price_trend"] == 0.0
+
+
+def test_sorter_language_setting_is_reported():
+    row = _db_row({"usd": "1.00"})
+    assert carddb.to_api_card(row, lang="de")["lang"] == "de"
+    assert carddb.to_api_card(row, lang="auto")["lang"] == row["lang"]

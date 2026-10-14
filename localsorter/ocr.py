@@ -179,14 +179,20 @@ def score_candidates(text, candidates):
     frame. Returns {card_id: (score, reasons)}. Matching a token exactly
     (after folding confusables) is required: substrings would let "M21" match
     inside random noise."""
-    tokens = [canon(t) for t in _TOKEN.findall(text)]
+    raw_tokens = _TOKEN.findall(text)
+    tokens = [canon(t) for t in raw_tokens]
     token_set = set(tokens)
     # Numbers also appear glued to the total ("123/264") or rarity ("123R").
     # A lone one-character token ("1") is too easily a stray I, l or |, so
     # those only count when written as "1/249"
     number_parts = set()
 
-    for token in tokens:
+    for raw, token in zip(raw_tokens, tokens):
+        # Only tokens with a real digit can be numbers: folding confusables
+        # would otherwise turn words like "IS" into "15"
+        if not any(ch.isdigit() for ch in raw):
+            continue
+
         parts = token.split("/")
 
         if len(parts) > 1:
