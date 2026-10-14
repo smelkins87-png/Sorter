@@ -1,0 +1,85 @@
+{
+  "bulk_updated_at": "2026-10-14T21:06:35.434+00:00",
+  "prices_updated": "2026-10-14T22:13:48+00:00",
+  "regions_version": "2",
+  "rows": {
+    "regions": 79861
+  },
+  "format": 1,
+  "kind": "closeups",
+  "compression": "none",
+  "sha256": "14214b1fff7a3e420ca67de6b49d5e18643b731ef5601d434833f83f670a82f1",
+  "size": 1313067008,
+  "parts": [
+    {
+      "name": "closeups.sqlite.000",
+      "size": 95000000,
+      "sha256": "2b045121388df88ec0a2efa7d1a9580f2f6ed3317eb0a88ffded87c44b9dfebd"
+    },
+    {
+      "name": "closeups.sqlite.001",
+      "size": 95000000,
+      "sha256": "b7d185aa47b05fdef7c100e1042fcc9877a7ec85d60d98f4bbbd74aea720bebc"
+    },
+    {
+      "name": "closeups.sqlite.002",
+      "size": 95000000,
+      "sha256": "49eb2c9e09bd3807b986d55562427cfe09974aac9b73442a73c2b4689402181a"
+    },
+    {
+      "name": "closeups.sqlite.003",
+      "size": 95000000,
+      "sha256": "6cae4ae77bc081b42118db8e45907c1e386c711c398f4030438631195a1908d3"
+    },
+    {
+      "name": "closeups.sqlite.004",
+      "size": 95000000,
+      "sha256": "e05fc06e102581a22d804f0d5361ff595f1e26bc46a970bcdbc473a31b11b8da"
+    },
+    {
+      "name": "closeups.sqlite.005",
+      "size": 95000000,
+      "sha256": "8baa6c8047e62e90f02f925de035e0c3ab17b01bfe338c409e6eca4029812192"
+    },
+    {
+      "name": "closeups.sqlite.006",
+      "size": 95000000,
+      "sha256": "412d82d77c39c20ea7fc80c79982402652984dc0eb3d695ef5df81e38d1c2f9a"
+    },
+    {
+      "name": "closeups.sqlite.007",
+      "size": 95000000,
+      "sha256": "7f6a3b2320e35779b6c071342e22896fb5fddf91e301a793c69e09cc7e409ecd"
+    },
+    {
+      "name": "closeups.sqlite.008",
+      "size": 95000000,
+      "sha256": "3ef63345f9a921854e18497c11da4fe199546ac82c6b2660587af05a2e115eef"
+    },
+    {
+      "name": "closeups.sqlite.009",
+      "size": 95000000,
+      "sha256": "9a8fd8d0de59bdbb667c783d4a64f98bd3566377e64d02bb48efe0b31bce58db"
+    },
+    {
+      "name": "closeups.sqlite.010",
+      "size": 95000000,
+      "sha256": "780a1edd03666bf1fa62aa3989d3c2579c4389bfb6254f8e13767ae64b6b56b6"
+    },
+    {
+      "name": "closeups.sqlite.011",
+      "size": 95000000,
+      "sha256": "a613346624ac925042358e02dd5b605cef95c427214360bef5b62cdfc39e7f56"
+    },
+    {
+      "name": "closeups.sqlite.012",
+      "size": 95000000,
+      "sha256": "4502023b9cd9cd534852053d128b095b72871c41d4b000c232df346bcb03a8a3"
+    },
+    {
+      "name": "closeups.sqlite.013",
+      "size": 78067008,
+      "sha256": "960b8227a35979344618f452c7558f7ab3831186383482031b3a855496c61f94"
+    }
+  ]
+}

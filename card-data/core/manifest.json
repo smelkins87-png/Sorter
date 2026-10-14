@@ -1,0 +1,22 @@
+{
+  "bulk_updated_at": "2026-10-14T21:06:35.434+00:00",
+  "prices_updated": "2026-10-14T22:13:48+00:00",
+  "regions_version": "2",
+  "rows": {
+    "cards": 118578,
+    "sets": 1059,
+    "hashes": 113355
+  },
+  "format": 1,
+  "kind": "core",
+  "compression": "gzip",
+  "sha256": "d0766be2d3dbe7e7581aff543a63b1a9d489868aa8377b3c08b150966702e665",
+  "size": 203132928,
+  "parts": [
+    {
+      "name": "core.sqlite.gz.000",
+      "size": 40984720,
+      "sha256": "5fc00d5f5fb80fb1eee21c4d990bb52ce886672935711aa1fa156e5302992da7"
+    }
+  ]
+}
